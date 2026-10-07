@@ -1,0 +1,52 @@
+{
+  "job_id": "MIG-0001",
+  "version": 1,
+  "origin": "llm",
+  "mappings": [
+    {
+      "target_section_id": "TGT-3",
+      "source_section_ids": [
+        "SRC-4.2",
+        "SRC-4.3"
+      ],
+      "mapping_type": "merge",
+      "ordering_rule": "preserve_source_order",
+      "status": "mapped",
+      "reason": "Both sections describe deviation creation, review, approval and closure.",
+      "confidence": 0.93,
+      "origin": "rule"
+    },
+    {
+      "target_section_id": "TGT-6",
+      "source_section_ids": [
+        "SRC-7"
+      ],
+      "unit_ids": [
+        "SRC-7-U001",
+        "SRC-7-U002"
+      ],
+      "mapping_type": "split",
+      "status": "mapped",
+      "reason": "Record-keeping part of section 7 belongs in Records.",
+      "origin": "llm"
+    },
+    {
+      "target_section_id": null,
+      "source_section_ids": [
+        "SRC-0"
+      ],
+      "mapping_type": "omit",
+      "status": "not_applicable",
+      "justification": "Legacy revision history; replaced by the template's document history table.",
+      "origin": "rule"
+    }
+  ],
+  "prompt_version": "section_planner/4",
+  "model": "azure/gpt-4o-poc",
+  "token_usage": {
+    "calls": 1,
+    "input_tokens": 2195,
+    "output_tokens": 180,
+    "total_tokens": 2375
+  }
+}

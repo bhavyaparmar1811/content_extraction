@@ -4,7 +4,7 @@
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
-from pydantic import Field, AliasChoices
+from pydantic import Field, AliasChoices, model_validator
 from pydantic_settings import BaseSettings
 
 # Automatically load .env into os.environ on startup
@@ -65,7 +65,18 @@ class Settings(BaseSettings):
     template_output_dir: Path = Path("data/template_output")
     template_extracted_images_dir: Path = Path("data/template_images")
     template_extracted_icons_dir: Path = Path("data/template_icons")
+    template_config_dir: Path = Path("data/template_config")  # human slot/region overrides (v2)
     template_allowed_extensions: list[str] = [".docx"]
+
+    # --- GWP (Good Writing Practice) guides, migration v2 ---
+    gwp_dir: Path = Path("data/gwp")                  # units, rules and report JSON per guide version
+    gwp_upload_dir: Path = Path("data/gwp/uploads")
+    gwp_allowed_extensions: list[str] = [".docx", ".pdf"]
+
+    # --- Migration v2 jobs ---
+    migration_v2_dir: Path = Path("data/migrations")  # data/migrations/{job_id}/{kind}_v{n}.json
+    section_planner_llm: str = "confirm"   # "confirm": one compact LLM call checks the rule plan; "off": rules only
+    section_planner_preview_chars: int = 100  # unit preview length sent for split candidates / unsure sections
 
     # --- LLM (LangChain) ---
     use_llm_section_summarizer: bool = False  # false = Mode A (programmatic), true = Mode B (LLM semantic)
@@ -76,11 +87,32 @@ class Settings(BaseSettings):
     llm_summarizer_max_tokens: int = 4096
 
     # --- Azure OpenAI (optional — overrides llm_planner_model / llm_summarizer_model if set) ---
-    use_azure_openai: bool = False                              # Set true to route all LLM calls through Azure
-    azure_openai_endpoint: Optional[str] = None                # e.g. "https://<your-resource>.openai.azure.com/"
-    azure_openai_api_version: str = "2024-12-01-preview"       # Azure OpenAI API version
-    azure_openai_planner_deployment: str = "gpt-4o"            # Deployment name for planner (Phase 2)
-    azure_openai_summarizer_deployment: str = "gpt-4o-mini"    # Deployment name for summarizer (Mode B)
+    # Each value also accepts the standard Azure variable name (AZURE_OPENAI_ENDPOINT,
+    # AZURE_OPENAI_API_VERSION, AZURE_OPENAI_DEPLOYMENT_NAME); the SOP_ name wins when both are set.
+    # Left unset, use_azure_openai turns on when an endpoint and a key are configured.
+    use_azure_openai: Optional[bool] = None
+    azure_openai_endpoint: Optional[str] = Field(
+        default=None,  # e.g. "https://<your-resource>.openai.azure.com/"
+        validation_alias=AliasChoices("SOP_AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_ENDPOINT", "azure_openai_endpoint"),
+    )
+    azure_openai_api_version: str = Field(
+        default="2024-12-01-preview",
+        validation_alias=AliasChoices(
+            "SOP_AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_API_VERSION", "azure_openai_api_version"
+        ),
+    )
+    azure_openai_planner_deployment: str = Field(
+        default="gpt-4o",  # Deployment name for planner (Phase 2)
+        validation_alias=AliasChoices(
+            "SOP_AZURE_OPENAI_PLANNER_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT_NAME", "azure_openai_planner_deployment"
+        ),
+    )
+    azure_openai_summarizer_deployment: str = Field(
+        default="gpt-4o-mini",  # Deployment name for summarizer (Mode B)
+        validation_alias=AliasChoices(
+            "SOP_AZURE_OPENAI_SUMMARIZER_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT_NAME", "azure_openai_summarizer_deployment"
+        ),
+    )
     azure_openai_api_key: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("AZURE_OPENAI_API_KEY", "SOP_AZURE_OPENAI_API_KEY", "azure_openai_api_key")
@@ -114,6 +146,12 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
+    @model_validator(mode="after")
+    def _default_azure_switch(self) -> "Settings":
+        if self.use_azure_openai is None:
+            self.use_azure_openai = bool(self.azure_openai_endpoint and self.azure_openai_api_key)
+        return self
+
     def resolve_paths(self, base: Path) -> None:
         """Resolve all relative paths against a base directory."""
         self.upload_dir = base / self.upload_dir
@@ -127,6 +165,10 @@ class Settings(BaseSettings):
         self.template_output_dir = base / self.template_output_dir
         self.template_extracted_images_dir = base / self.template_extracted_images_dir
         self.template_extracted_icons_dir = base / self.template_extracted_icons_dir
+        self.template_config_dir = base / self.template_config_dir
+        self.gwp_dir = base / self.gwp_dir
+        self.gwp_upload_dir = base / self.gwp_upload_dir
+        self.migration_v2_dir = base / self.migration_v2_dir
         self.log_dir = base / self.log_dir
         self.log_file_path = base / self.log_file_path
         self.error_file_path = base / self.error_file_path
@@ -146,6 +188,9 @@ class Settings(BaseSettings):
             self.template_output_dir,
             self.template_extracted_images_dir,
             self.template_extracted_icons_dir,
+            self.gwp_dir,
+            self.gwp_upload_dir,
+            self.migration_v2_dir,
             self.log_dir,
         ]:
             dir_path.mkdir(parents=True, exist_ok=True)

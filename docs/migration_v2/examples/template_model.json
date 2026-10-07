@@ -1,0 +1,152 @@
+{
+  "schema_version": "v2.0",
+  "template_id": "TPL-MAIN-GP",
+  "template_version": 1,
+  "source_file": "Template_Main_GP_Docs.docx",
+  "normalized_file": "Template_Main_GP_Docs_normalized.docx",
+  "readiness": "ready",
+  "sections": [
+    {
+      "section_id": "TGT-3",
+      "key": "PROCESS",
+      "number": "3",
+      "heading": "Performing the Process",
+      "level": 1,
+      "display_order": 3,
+      "required": true,
+      "slots": [
+        {
+          "slot_id": "TGT-3-INTRO",
+          "section_id": "TGT-3",
+          "key": "callout_introduction",
+          "instruction": "Executive Summary/Introduction (short description of subject).",
+          "content_type": "supporting_information",
+          "required": false,
+          "display_order": 0,
+          "anchor": {
+            "kind": "content_control",
+            "ref": "CC_PROCESS_CALLOUT_INTRODUCTION"
+          },
+          "instruction_behavior": "replace",
+          "icon": {
+            "icon_key": "icon_0a1b2c3d4e"
+          },
+          "formatting_profile": "callout",
+          "callout_kind": "introduction"
+        },
+        {
+          "slot_id": "TGT-3-RESPONSIBILITY",
+          "section_id": "TGT-3",
+          "key": "responsibility",
+          "instruction": "Who performs this activity?",
+          "content_type": "responsibility",
+          "required": true,
+          "display_order": 2,
+          "anchor": {
+            "kind": "content_control",
+            "ref": "CC_PROCESS_RESPONSIBILITY"
+          },
+          "instruction_behavior": "retain_as_label",
+          "icon": {
+            "icon_key": "icon_a1b2c3d4e5",
+            "type": "person"
+          },
+          "formatting_profile": "bullets",
+          "instruction_ids": [
+            "s3_i001"
+          ]
+        },
+        {
+          "slot_id": "TGT-3-STEPS",
+          "section_id": "TGT-3",
+          "key": "steps",
+          "instruction": "What steps must be completed?",
+          "content_type": "ordered_procedure",
+          "required": true,
+          "display_order": 3,
+          "anchor": {
+            "kind": "content_control",
+            "ref": "CC_PROCESS_STEPS"
+          },
+          "instruction_behavior": "retain_as_label",
+          "formatting_profile": "ordered_list"
+        },
+        {
+          "slot_id": "TGT-3-TIMING",
+          "section_id": "TGT-3",
+          "key": "timing",
+          "instruction": "When must this activity be completed?",
+          "content_type": "timing",
+          "required": false,
+          "display_order": 4,
+          "anchor": {
+            "kind": "table_cell",
+            "ref": "T4R2C3",
+            "table_index": 4,
+            "row_index": 2,
+            "column_index": 3
+          },
+          "instruction_behavior": "replace",
+          "icon": {
+            "icon_key": "icon_f6e5d4c3b2",
+            "type": "clock"
+          }
+        }
+      ]
+    }
+  ],
+  "callout_palette": [
+    {
+      "kind": "introduction",
+      "label": "Introduction/Executive Summary",
+      "fill_hex": "D2F2F7",
+      "icon_key": "icon_0a1b2c3d4e",
+      "layout": "icon_text_two_cell",
+      "column_widths_pt": [
+        42.5,
+        411.0
+      ],
+      "prototype_table_index": 10,
+      "origin": "prototype"
+    },
+    {
+      "kind": "explanation",
+      "label": "Explanation",
+      "fill_hex": "00E47C",
+      "icon_key": "icon_1b2c3d4e5f",
+      "layout": "icon_text_two_cell",
+      "column_widths_pt": [
+        42.5,
+        411.0
+      ],
+      "prototype_table_index": 11,
+      "origin": "prototype"
+    },
+    {
+      "kind": "attention",
+      "label": "Attention",
+      "fill_hex": "F5CDB9",
+      "icon_key": "icon_2c3d4e5f6a",
+      "layout": "icon_text_two_cell",
+      "column_widths_pt": [
+        42.5,
+        411.0
+      ],
+      "prototype_table_index": 12,
+      "origin": "prototype"
+    },
+    {
+      "kind": "key_takeaway",
+      "label": "Key take away",
+      "fill_hex": "FBF9AA",
+      "icon_key": "icon_3d4e5f6a7b",
+      "layout": "icon_text_two_cell",
+      "column_widths_pt": [
+        42.5,
+        411.0
+      ],
+      "prototype_table_index": 13,
+      "origin": "prototype"
+    }
+  ]
+}

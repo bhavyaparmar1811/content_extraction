@@ -1,0 +1,34 @@
+{
+  "guide_id": "GWP-CORP",
+  "version": 1,
+  "prompt_version": "gwp_extractor/1",
+  "model": "azure/gpt-4o",
+  "input_unit_ids": [
+    "GWP-2-U004",
+    "GWP-6.1-U011",
+    "GWP-6.1-U012",
+    "GWP-6.3-U001"
+  ],
+  "uncovered_unit_ids": [
+    "GWP-6.1-U012"
+  ],
+  "skipped": [
+    {
+      "source_unit_ids": [
+        "GWP-6.3-U001"
+      ],
+      "reason": "Authoring process: how to run Word's spelling check."
+    }
+  ],
+  "dropped": [
+    {
+      "text": "Use the approved template.",
+      "reason": "no valid source unit (cited: GWP-9-U001)"
+    }
+  ],
+  "downgraded": {
+    "STY-011": [
+      "missing param 'terms'"
+    ]
+  }
+}

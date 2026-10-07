@@ -190,22 +190,12 @@ async def refresh_token(
     return response
 
 
-@router.get(
-    "/me",
-    response_model=CurrentUserResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Retrieve authenticated user profile",
-)
-async def get_current_user(
-    request: Request,
-    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-ID"),
+async def require_user(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     settings: Settings = Depends(get_settings),
     auth_store: AuthStore = Depends(get_auth_store),
-):
-    """Validate Bearer access token and return user profile."""
-    correlation_id = _correlation_id(request, x_correlation_id)
-
+) -> dict:
+    """Dependency: the active user behind the Bearer access token, or 401/403."""
     if not authorization or not authorization.startswith("Bearer "):
         raise LoginError(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -248,6 +238,22 @@ async def get_current_user(
             code="ROLE_INACTIVE",
             message="User role is inactive.",
         )
+    return user
+
+
+@router.get(
+    "/me",
+    response_model=CurrentUserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve authenticated user profile",
+)
+async def get_current_user(
+    request: Request,
+    x_correlation_id: Optional[str] = Header(None, alias="X-Correlation-ID"),
+    user: dict = Depends(require_user),
+):
+    """Validate Bearer access token and return user profile."""
+    correlation_id = _correlation_id(request, x_correlation_id)
 
     return CurrentUserResponse(
         success=True,

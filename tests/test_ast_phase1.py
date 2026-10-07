@@ -472,6 +472,48 @@ class TestPDFLayoutAnalyzer:
         assert len(body_blocks) == 1
         assert body_blocks[0].content == "Body text"
 
+    def test_body_text_near_margin_is_kept(self, settings):
+        """Inside the 12% footer zone but off the page edge, plain text is body.
+
+        Regression: the check read ``el.text`` (always empty), so every element
+        in the zone was dropped, e.g. a bullet just above the footer.
+        """
+        analyzer = PDFLayoutAnalyzer(settings)
+        bullet = ExtractedElement(
+            element_type=ElementType.LIST_ITEM, content='• Use personal pronouns like "I" and "you".',
+            page=1, sequence=0,
+            bbox=BoundingBox(x0=72, y0=745, x1=540, y1=759, page=1),
+        )
+        footer = ExtractedElement(
+            element_type=ElementType.PARAGRAPH, content="Retrieved by A on 03 Mar 2026 @ 16:39 GMT+00:00",
+            page=1, sequence=1,
+            bbox=BoundingBox(x0=72, y0=807, x1=540, y1=818, page=1),
+        )
+        page = PageContent(page_number=1, elements=[bullet, footer], width=595, height=842)
+        layout = analyzer.analyze_page(page)
+        body = [b.content for r in layout.regions for b in r.blocks]
+        assert body == [bullet.content]
+        assert [f.content for f in layout.footers] == [footer.content]
+
+    def test_repeated_header_text_is_stripped(self, settings):
+        """A header value with no pattern (the title beside a "Title:" label) repeats on every page."""
+        analyzer = PDFLayoutAnalyzer(settings)
+        pages = []
+        for n in (1, 2, 3):
+            pages.append(PageContent(page_number=n, width=595, height=842, elements=[
+                ExtractedElement(
+                    element_type=ElementType.PARAGRAPH, content="Good Writing Practice",
+                    page=n, sequence=0, bbox=BoundingBox(x0=200, y0=80, x1=540, y1=95, page=n),
+                ),
+                ExtractedElement(
+                    element_type=ElementType.PARAGRAPH, content=f"Body {n}",
+                    page=n, sequence=1, bbox=BoundingBox(x0=72, y0=300, x1=540, y1=315, page=n),
+                ),
+            ]))
+        doc = RawDocument(source="x.pdf", metadata=DocumentMetadata(title="x", page_count=3, file_type="pdf"), pages=pages)
+        analyzer.reorder_document(doc)
+        assert [[e.content for e in p.elements] for p in doc.pages] == [["Body 1"], ["Body 2"], ["Body 3"]]
+
     def test_reorder_document(self, settings):
         analyzer = PDFLayoutAnalyzer(settings)
         elements = [

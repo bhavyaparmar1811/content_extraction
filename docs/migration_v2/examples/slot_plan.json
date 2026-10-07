@@ -1,0 +1,72 @@
+{
+  "job_id": "MIG-0001",
+  "version": 1,
+  "origin": "llm",
+  "sections": [
+    {
+      "target_section_id": "TGT-3",
+      "source_section_ids": [
+        "SRC-4.2"
+      ],
+      "slot_mappings": [
+        {
+          "slot_id": "TGT-3-RESPONSIBILITY",
+          "source_unit_ids": [
+            "SRC-4.2-U001",
+            "SRC-4.2-U002",
+            "SRC-4.2-U003"
+          ],
+          "extraction_scope": [
+            "actor",
+            "responsibility"
+          ],
+          "migration_action": "extract_and_consolidate",
+          "status": "mapped"
+        },
+        {
+          "slot_id": "TGT-3-STEPS",
+          "source_unit_ids": [
+            "SRC-4.2-U001",
+            "SRC-4.2-U002",
+            "SRC-4.2-U003"
+          ],
+          "extraction_scope": [
+            "action",
+            "condition",
+            "dependency"
+          ],
+          "migration_action": "rewrite_as_ordered_procedure",
+          "ordering_rule": "preserve_source_order",
+          "status": "mapped"
+        },
+        {
+          "slot_id": "TGT-3-TIMING",
+          "source_unit_ids": [
+            "SRC-4.2-U002",
+            "SRC-4.2-U004"
+          ],
+          "extraction_scope": [
+            "timing",
+            "deadline"
+          ],
+          "status": "mapped"
+        },
+        {
+          "slot_id": "TGT-3-INPUTS",
+          "status": "source_content_not_found"
+        }
+      ],
+      "unplaced_unit_ids": [],
+      "callout_assignments": [
+        {
+          "unit_ids": [
+            "SRC-4.2-U003"
+          ],
+          "kind": "attention",
+          "origin": "rule",
+          "reason": "Source unit is typed as a warning."
+        }
+      ]
+    }
+  ]
+}

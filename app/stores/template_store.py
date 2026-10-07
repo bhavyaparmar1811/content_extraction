@@ -59,6 +59,10 @@ class TemplateStore:
                 conn.execute(
                     "ALTER TABLE template_records ADD COLUMN total_callouts INTEGER DEFAULT 0;"
                 )
+            # Migration v2 template model (Phase 3)
+            for column in ("model_path", "normalized_path", "readiness_status"):
+                if column not in existing_columns:
+                    conn.execute(f"ALTER TABLE template_records ADD COLUMN {column} TEXT;")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tpl_uid ON template_records(template_uid);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_tpl_status ON template_records(status);")
             conn.commit()
@@ -228,6 +232,27 @@ class TemplateStore:
             conn.commit()
             return self.get_record_by_id(record_id)
 
+    def update_template_model(
+        self,
+        record_id: int,
+        model_path: Optional[str],
+        normalized_path: Optional[str],
+        readiness_status: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        """Record the v2 TemplateModel files and readiness status of a template version."""
+        now = datetime.utcnow().isoformat() + "Z"
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE template_records
+                SET model_path = ?, normalized_path = ?, readiness_status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (model_path, normalized_path, readiness_status, now, record_id),
+            )
+            conn.commit()
+            return self.get_record_by_id(record_id)
+
     def delete_record(self, record_id: int) -> bool:
         """Delete a template record. If no sibling versions remain, perform smart cleanup."""
         record = self.get_record_by_id(record_id)
@@ -237,6 +262,8 @@ class TemplateStore:
         template_uid = record["template_uid"]
         upload_path = record.get("upload_path")
         output_path = record.get("output_path")
+        model_path = record.get("model_path")
+        normalized_path = record.get("normalized_path")
 
         with self._get_connection() as conn:
             conn.execute("DELETE FROM template_records WHERE id = ?", (record_id,))
@@ -255,6 +282,12 @@ class TemplateStore:
             p = Path(output_path)
             p.unlink(missing_ok=True)
             p.with_name(f"{p.stem}_migration.json").unlink(missing_ok=True)
+        if model_path:
+            p = Path(model_path)
+            p.unlink(missing_ok=True)
+            p.with_name(p.name.replace("_model.json", "_readiness.json")).unlink(missing_ok=True)
+        if normalized_path:
+            Path(normalized_path).unlink(missing_ok=True)
 
         # If no siblings left, clean image/icon directories and any leftover files
         if remaining == 0:

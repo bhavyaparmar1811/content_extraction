@@ -149,7 +149,7 @@ async def migrate_document(
             if not record:
                 record = template_store.get_record_by_uid(template_id)
             if not record:
-                all_records = template_store.list_records()
+                all_records = template_store.get_records()
                 record = next(
                     (
                         r
@@ -182,7 +182,7 @@ async def migrate_document(
     else:
         # 1. Fallback: Find registered ready template in template_store
         if template_store:
-            ready_templates = template_store.list_records(status="ready")
+            ready_templates = template_store.get_records(status="ready")
             for cand in ready_templates:
                 if cand.get("upload_path") and Path(cand["upload_path"]).exists():
                     target_template_path = Path(cand["upload_path"])
@@ -191,9 +191,9 @@ async def migrate_document(
                     )
                     break
 
-        # 2. Fallback: Look in data/template_uploads
+        # 2. Fallback: Look in settings.template_upload_dir
         if not target_template_path:
-            uploads = list(Path("data/template_uploads").glob("*.docx"))
+            uploads = list(settings.template_upload_dir.glob("*.docx"))
             if uploads:
                 target_template_path = uploads[0]
 

@@ -69,6 +69,39 @@ def _is_major_section_heading(
     return None
 
 
+def _word_numbered_heading(
+    heading: Any,
+    text: str,
+    level: int,
+    sections: list,
+) -> tuple[str, Optional[str]]:
+    """Return (display text, major section number or None) for a DOCX heading.
+
+    Word auto-numbering is not part of the heading text, so the parser computes
+    it ("6", "6.1.2") and stores it as ``numbering`` with
+    ``metadata["numbering_source"] == "numPr"``. The number is prefixed to the
+    text so titles keep the "6 PROCESS" form downstream code expects. A level-1
+    heading with a top-level number starts a section. A "Heading 1" with no
+    number at all gets the next running number.
+    """
+    if heading is None or not text:
+        return text, None
+    meta = getattr(heading, "metadata", None) or {}
+    number = getattr(heading, "numbering", None) if meta.get("numbering_source") == "numPr" else None
+    if text.endswith(":"):
+        return text, None
+    if number:
+        display = text if re.match(rf"^{re.escape(number)}(?:[.\s]|$)", text) else f"{number} {text}"
+        major = number if level == 1 and "." not in number else None
+        return display, major
+    style = (getattr(heading, "style_name", None) or "").lower()
+    if level == 1 and style == "heading 1" and not re.match(r"^\d", text):
+        used = [int(sec.section_number) for sec in sections if (sec.section_number or "").isdigit()]
+        major = str(max(used, default=0) + 1)
+        return f"{major} {text}", major
+    return text, None
+
+
 def _extract_section_number(title: str) -> Optional[str]:
     match = re.match(r"^(\d+(?:\.\d+)*)", title.strip())
     if match:
@@ -243,10 +276,12 @@ class MigrationExporter:
                 heading = getattr(node, "heading", None)
                 heading_level = getattr(heading, "level", 1) if heading else 1
                 heading_text = (getattr(heading, "text", "") or "").strip() if heading else ""
-                curr_sec_num = current_section.section_number if current_section else None
-                major_sec = _is_major_section_heading(
-                    heading_text, level=heading_level, current_section_number=curr_sec_num
-                ) if heading_text else None
+                heading_text, major_sec = _word_numbered_heading(heading, heading_text, heading_level, sections)
+                if major_sec is None and heading_text:
+                    curr_sec_num = current_section.section_number if current_section else None
+                    major_sec = _is_major_section_heading(
+                        heading_text, level=heading_level, current_section_number=curr_sec_num
+                    )
 
                 if major_sec:
                     ensure_section(heading_text, page, section_number=major_sec)
@@ -285,10 +320,12 @@ class MigrationExporter:
                 text = (getattr(node, "text", "") or "").strip()
                 if text:
                     level = getattr(node, "level", 1)
-                    curr_sec_num = current_section.section_number if current_section else None
-                    major_sec = _is_major_section_heading(
-                        text, level=level, current_section_number=curr_sec_num
-                    )
+                    text, major_sec = _word_numbered_heading(node, text, level, sections)
+                    if major_sec is None:
+                        curr_sec_num = current_section.section_number if current_section else None
+                        major_sec = _is_major_section_heading(
+                            text, level=level, current_section_number=curr_sec_num
+                        )
                     if major_sec:
                         ensure_section(text, page, section_number=major_sec)
                         add_element(

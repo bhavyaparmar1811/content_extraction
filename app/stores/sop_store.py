@@ -54,6 +54,10 @@ class SopStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sop_uid ON sop_records(document_uid);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sop_status ON sop_records(status);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_sop_job ON sop_records(job_id);")
+            # Additive migrations for databases created before a column existed.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(sop_records)")}
+            if "units_path" not in columns:
+                conn.execute("ALTER TABLE sop_records ADD COLUMN units_path TEXT")  # v2 SourceDocument JSON
             conn.commit()
 
     def get_next_version(self, document_uid: str) -> int:
@@ -83,6 +87,7 @@ class SopStore:
         source_filename: Optional[str] = None,
         output_path: Optional[str] = None,
         status: Optional[str] = None,
+        units_path: Optional[str] = None,
     ) -> dict[str, Any]:
         """Insert a new version or update an existing record."""
         now = datetime.utcnow().isoformat() + "Z"
@@ -97,8 +102,8 @@ class SopStore:
                     job_id, document_uid, document_number, document_name,
                     document_title, document_version, document_type, file_type,
                     language, page_count, gpdat_version, status,
-                    source_filename, output_path, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_filename, output_path, units_path, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -115,6 +120,7 @@ class SopStore:
                     record_status,
                     source_filename,
                     output_path,
+                    units_path,
                     now,
                     now,
                 ),
