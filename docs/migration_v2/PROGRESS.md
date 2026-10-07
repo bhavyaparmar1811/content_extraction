@@ -541,3 +541,16 @@ Entry format:
     - nothing is ever generated to fill a gap.
 - Added `USER_TASKS.md`: the user's open tasks and how to check progress.
 - Next step: unchanged. The user adds the new SOPs and the second template, then runs the inspection; then Phase 8.
+
+## 2026-10-07: Inspection WARN on BI-VQD-10505-S PROCESS: explained, fix deferred
+- The user's `--llm` inspection run gave one WARN: "Mapping to 'PROCESS' needs review … content reference 8.1, other 7, scope 4; LLM: some passages in SRC-6 may belong to REFERENCES or APPLICABILITY".
+- **False positive.** The plan matches the golden file, all passages are placed and nothing is blocking. Causes, both in `planning/signals.py` `unit_labels()`:
+  - Procedure steps that cite another document inline ("as per BI-VQD-176305-S", "described in BI-VQD-10581-S") get the full `reference` label.
+  - Bare `_SCOPE` words (`site`, `applicable`, ...) fire on shipping-procedure wording ("direct-to-site shipment").
+  - The LLM sees only these label summaries for PROCESS, so it flags the section.
+- **Fix (agreed, deferred until the new samples arrive so it is tuned on more than 3 SOPs):**
+  - Down-weight `reference` for IDs inside procedure sentences; keep full weight for reference units and rows.
+  - Split `_SCOPE` into strong and weak cues, so weak cues alone never outweigh procedure or responsibility.
+  - Keep the thresholds unchanged.
+  - Tests: inline citation → procedure; reference row → reference; "direct-to-site" → not scope; "This SOP applies to all sites" → scope.
+  - The goldens and the RPAS split must still hold.
