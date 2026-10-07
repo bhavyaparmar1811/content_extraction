@@ -1,5 +1,7 @@
 # Migration v2: Progress Log
 
+**Tasks waiting on the user, and how to check progress: see [USER_TASKS.md](USER_TASKS.md).**
+
 Handoff log for `IMPLEMENTATION_PLAN.md`. Append one entry at the end of each phase or session. At the start of a session, read the plan's relevant phase and the latest entry here.
 
 Entry format:
@@ -526,3 +528,16 @@ Entry format:
   - GWP PDF (PDF smoke test): text completeness PASS, plan WARN (review items only).
 - Tests: `tests/test_v2_inspection.py` (5: stages and checks, escaping and highlighting, lost-text detection, index, samples). Planner test for PDF front matter. Full suite: 438 passed, 9 skipped.
 - **Next (user):** add the PDF SOPs, the extra DOCX SOPs and the second template (with its config, or let the report list the regions to decide), run the tool, and review the reports. Every FAIL or WARN that is a defect gets fixed before Phase 8. Also pending: SME review of the goldens and approval of the 40 GWP candidate rules.
+
+## 2026-10-07: Decisions and housekeeping
+- Committed Phases 1–7 and the inspection tool as `9c75540` on `features/migration-v2` (not pushed). Before the commit: 438 passed, 9 skipped.
+- From the user:
+  - **Goldens accepted for now.** The 3 files in `documents/golden/` stand as the reference; the user will send changes if any come up.
+  - **SOP content may be sent to the Azure OpenAI `gpt-4o-poc` deployment.**
+  - **Empty slots.** Recorded in IMPLEMENTATION_PLAN.md, Phases 10, 11 and 12:
+    - an optional slot with no content is removed;
+    - a required slot with no content shows a gap marker in the review draft, and the reviewer accepts it as N/A or adds content;
+    - the final export removes accepted gaps and their instruction text, and is blocked while any gap is unresolved;
+    - nothing is ever generated to fill a gap.
+- Added `USER_TASKS.md`: the user's open tasks and how to check progress.
+- Next step: unchanged. The user adds the new SOPs and the second template, then runs the inspection; then Phase 8.

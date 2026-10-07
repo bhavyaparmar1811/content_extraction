@@ -370,6 +370,7 @@ It does no style rewriting: no voice, wording or sentence-length changes, and no
 **Gates** (`quality/gates.py`):
 - implement the hard gates from §21;
 - tag high-risk content with a deterministic risk classifier for acceptance criteria, safety, deadlines, numeric limits and prohibitions;
+- count unresolved required-slot gaps; export is blocked until each one is filled or accepted as N/A;
 - produce a `QualityReport` artifact.
 
 **Done when:** seeded faults (dropped number, weakened modality, reordered step) are caught and repaired, or escalated.
@@ -397,7 +398,11 @@ It does no style rewriting: no voice, wording or sentence-length changes, and no
   - A section with `optional_marker` loses its highlighted "(optional)" text when populated, and is removed when empty.
 - Tables reuse `table_migrator.py`, populating the template's own tables when the anchor is a table.
 - The TOC reuses `toc_builder.py`.
-- Gaps render as a visible, styled "Source content not found. Human review required." marker that the gates count.
+- **Empty slots (decided 2026-10-07):**
+  - An optional slot with no content (`not_applicable`) is removed, together with its instruction text. Unused conditional blocks and example rows are removed too.
+  - A required slot with no content (`source_content_not_found`) renders in the **review draft only** as a visible, styled "Source content not found. Human review required." marker that the gates count. The reviewer either accepts it as N/A or supplies content.
+  - The **final export** removes accepted gap slots and their instruction text.
+  - No content is ever generated to fill a gap.
 
 **Tests:**
 - open the output with python-docx and confirm content sits under the right anchors;
@@ -440,6 +445,7 @@ Rendering happens only after the document is complete and consistent as data.
 **Export:**
 - `GET /api/v1/migrations/{id}/export/word` (the `/api/v1/export/word/{id}` path in `migration_plan.md` §25 moves here to keep one API family), plus `/traceability`, a claim → unit → source location mapping in JSON or CSV.
 - Exporting the Word file marks the `sop_records` version with the migrated artifact.
+- The final export removes reviewer-accepted gap slots and their instructions (see Phase 11, "Empty slots"). Export is refused while any gap is still unresolved, and each removed gap is recorded in the audit trail.
 
 **Done when:** a full job runs end to end in auto mode on the sample, and the audit trail is complete.
 
