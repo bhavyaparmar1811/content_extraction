@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     migration_v2_dir: Path = Path("data/migrations")  # data/migrations/{job_id}/{kind}_v{n}.json
     section_planner_llm: str = "confirm"   # "confirm": one compact LLM call checks the rule plan; "off": rules only
     section_planner_preview_chars: int = 100  # unit preview length sent for split candidates / unsure sections
+    slot_planner_llm: str = "confirm"      # "confirm": LLM checks doubtful slot placements and proposes callouts; "off": rules only
+    slot_planner_preview_chars: int = 160  # passage preview length in the slot planner prompt
+    slot_planner_block_tokens: int = 5000  # passage tokens per slot planner call; larger sections are split
 
     # --- LLM (LangChain) ---
     use_llm_section_summarizer: bool = False  # false = Mode A (programmatic), true = Mode B (LLM semantic)

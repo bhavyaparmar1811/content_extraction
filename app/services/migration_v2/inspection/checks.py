@@ -92,30 +92,51 @@ def _plan(insp: "Inspection") -> Check:
     return Check("Section plan", WARN if review else PASS, summary, details)
 
 
+def _slots(insp: "Inspection") -> Check:
+    report, plan = insp.slot_report, insp.slot_plan
+    gates = report.open_gate_issues
+    mappings = [m for s in plan.sections for m in s.slot_mappings]
+    filled = sum(bool(m.source_unit_ids) for m in mappings)
+    gaps = sum(m.status == MappingStatus.SOURCE_CONTENT_NOT_FOUND for m in mappings)
+    callouts = sum(len(s.callout_assignments) for s in plan.sections)
+    review = [i for i in report.issues if i.gate is None]
+    summary = (f"{filled} of {len(mappings)} slots filled, {gaps} gap(s), {callouts} callout(s), unit coverage "
+               f"{report.unit_coverage * 100:.0f}%, {len(gates)} blocking issue(s), {len(review)} to review")
+    details = [f"BLOCKING: {i.message}" for i in gates] + [i.message for i in review]
+    if gates:
+        return Check("Slot plan", FAIL, summary, details)
+    return Check("Slot plan", WARN if review else PASS, summary, details)
+
+
 def _golden(insp: "Inspection") -> Check:
     if insp.golden is None:
         return Check("Golden comparison", INFO, "no golden expectation for this SOP")
-    details = insp.golden_problems + [f"must-preserve text not found: {m!r}" for m in insp.missing_preserve]
+    details = (insp.golden_problems + insp.golden_slot_problems
+               + [f"must-preserve text not found: {m!r}" for m in insp.missing_preserve])
     if details:
         return Check("Golden comparison", FAIL, f"{len(details)} difference(s) from the reviewed golden", details)
-    return Check("Golden comparison", PASS, "section mapping and must-preserve facts match the golden")
+    return Check("Golden comparison", PASS, "section mapping, slot placements, empty slots and must-preserve facts match")
 
 
 def _llm(insp: "Inspection") -> Check:
-    usage = insp.plan.token_usage
-    if not usage:
-        llm_events = [e for e in insp.events if e["event"] == "section_planner_llm_failed"]
-        if llm_events:
-            return Check("LLM check", WARN, "the LLM call failed; the rule plan was kept",
-                         [str(e["detail"]) for e in llm_events])
-        return Check("LLM check", INFO, "not run (rules only); use --llm to run the confirm call")
-    return Check("LLM check", PASS,
-                 f"{usage.get('calls', 0)} call(s), {usage.get('input_tokens', 0)} input / "
-                 f"{usage.get('output_tokens', 0)} output tokens ({insp.plan.model}, {insp.plan.prompt_version})")
+    stages = [("section plan", insp.plan.token_usage, insp.plan.model, insp.plan.prompt_version),
+              ("slot plan", insp.slot_plan.token_usage, insp.slot_plan.model, insp.slot_plan.prompt_version)]
+    failed = [e for e in insp.events if e["event"] in ("section_planner_llm_failed", "slot_planner_llm_failed")]
+    ran = [(name, u, m, p) for name, u, m, p in stages if u]
+    if not ran:
+        if failed:
+            return Check("LLM check", WARN, "the LLM call failed; the rule plan was kept", [str(e["detail"]) for e in failed])
+        return Check("LLM check", INFO, "not run (rules only); use --llm to run the confirm calls")
+    parts = [f"{name}: {u.get('calls', 0)} call(s), {u.get('input_tokens', 0)} in / {u.get('output_tokens', 0)} out"
+             for name, u, _, _ in ran]
+    model = ", ".join(sorted({f"{m}, {p}" for _, _, m, p in ran}))
+    return Check("LLM check", WARN if failed else PASS, "; ".join(parts) + f" ({model})",
+                 [str(e["detail"]) for e in failed])
 
 
 def evaluate(insp: "Inspection") -> list[Check]:
-    return [_completeness(insp), _structure(insp), _template(insp), _facts(insp), _plan(insp), _golden(insp), _llm(insp)]
+    return [_completeness(insp), _structure(insp), _template(insp), _facts(insp), _plan(insp), _slots(insp),
+            _golden(insp), _llm(insp)]
 
 
 def overall(checks: list[Check]) -> str:

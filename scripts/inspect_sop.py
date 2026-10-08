@@ -9,7 +9,7 @@ Examples (from content_extraction/):
     venv/Scripts/python scripts/inspect_sop.py --sop documents/SOPs
     venv/Scripts/python scripts/inspect_sop.py --sop "documents/SOPs/BI-VQD-10505-S.docx" --llm
     venv/Scripts/python scripts/inspect_sop.py --sop new_sops/ --template "documents/Templates/Other.docx" \
-        --template-config documents/template_config/Other.json --gwp-rules documents/GWP/BI-VQD-24416-G_rules.json
+        --template-config documents/template_config/Other.json --gwp-rules documents/GWP/BI-VQD-24416-G_v3_rules.json
 """
 
 from __future__ import annotations
@@ -58,9 +58,10 @@ async def main() -> int:
     parser.add_argument("--sop", required=True, type=Path, help="An SOP (.docx/.pdf) or a folder of them")
     parser.add_argument("--template", type=Path, help="Template .docx (default: the only one in documents/Templates)")
     parser.add_argument("--template-config", type=Path, help="Template config JSON (default: documents/template_config/<stem>.json)")
-    parser.add_argument("--gwp-rules", type=Path, help="Approved GWP rules JSON (optional)")
+    parser.add_argument("--gwp-rules", type=Path,
+                        help="GWP rules JSON extracted by the app (scripts/extract_gwp.py); candidates are previewed as approved")
     parser.add_argument("--golden-dir", type=Path, default=ROOT / "documents" / "golden")
-    parser.add_argument("--llm", action="store_true", help="Run the section planner's LLM confirm call (Azure)")
+    parser.add_argument("--llm", action="store_true", help="Run the section and slot planners' LLM confirm calls (Azure)")
     parser.add_argument("--out", type=Path, default=ROOT / "documents" / "reports")
     args = parser.parse_args()
 

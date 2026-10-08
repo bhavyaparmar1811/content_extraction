@@ -5,8 +5,9 @@ of the default next one (VALIDATING → REPAIRING, QUALITY_REVIEW →
 HUMAN_REVIEW_REQUIRED...). A stage must be safe to re-run: after a crash or
 a retry it runs again and writes the next artifact versions.
 
-Real so far: PARSING (inputs snapshot and protected facts, Phases 5-6) and
-PLANNING_SECTIONS (section planner, Phase 7). The others are stubs until their
+Real so far: PARSING (inputs snapshot and protected facts, Phases 5-6),
+PLANNING_SECTIONS (section planner, Phase 7) and PLANNING_SLOTS (slot planner,
+Phase 8). The others are stubs until their
 phase lands; each stub records a ``stage_stub`` event, so a job's audit log
 shows what was skipped.
 """
@@ -20,18 +21,16 @@ from app.schemas.v2 import (
     ArtifactKind,
     GwpRuleSet,
     JobStatus,
-    MappingStatus,
     MigrationJob,
     PlanOrigin,
     RuleCategory,
-    SectionSlotPlan,
+    SectionPlan,
     SectionStatus,
-    SlotMapping,
-    SlotPlan,
     SourceDocument,
     TemplateModel,
 )
 from app.services.llm.prompts.v2.section_planner import PROMPT_VERSION as SECTION_PLANNER_PROMPT_VERSION
+from app.services.llm.prompts.v2.slot_planner import PROMPT_VERSION as SLOT_PLANNER_PROMPT_VERSION
 from app.stores.migration_store import MigrationStore
 
 from .artifacts import ArtifactWriter
@@ -39,6 +38,9 @@ from .gwp.service import select_rules
 from .inputs import InputResolver
 from .planning.section_planner import SectionPlanCorrections, SectionPlanner, run_confirm
 from .planning.section_validator import validate_section_plan
+from .planning.slot_planner import SlotPlanCorrections, SlotPlanner
+from .planning.slot_planner import run_confirm as run_slot_confirm
+from .planning.slot_validator import validate_slot_plan
 from .quality.facts import extract_facts
 
 SYSTEM_ACTOR = "system"
@@ -104,7 +106,7 @@ async def parsing(ctx: StageContext) -> None:
                             {"detail": "no GWP guide selected; the built-in preservation rules still apply"})
 
 
-# ── Stubs ─────────────────────────────────────────────────────────────
+# ── Planning ──────────────────────────────────────────────────────────
 
 
 async def plan_sections(ctx: StageContext) -> None:
@@ -148,27 +150,63 @@ async def plan_sections(ctx: StageContext) -> None:
     ctx.write(ArtifactKind.QUALITY_REPORT, report, scope="section_plan")
 
 
-async def plan_slots_stub(ctx: StageContext) -> None:
-    """Phase 8 replaces this. Every slot is left for review, with no evidence."""
+async def plan_slots(ctx: StageContext) -> None:
+    """Level 2 plan inside each approved section mapping: rules place passages, the LLM checks per block (Phase 8).
+
+    The GWP rules come from the job's ``gwp_rules`` artifact, the rule set extracted from the guide the job
+    names: its STR and FMT rules go to the LLM, and every slot lists the STY/PRES/FMT rules the drafter applies.
+    """
+    source = ctx.require(ArtifactKind.SOURCE_MODEL, SourceDocument)
     template = ctx.require(ArtifactKind.TEMPLATE_MODEL, TemplateModel)
-    plan = SlotPlan(
-        job_id=ctx.job.job_id,
-        version=ctx.next_version(ArtifactKind.SLOT_PLAN),
-        sections=[
-            SectionSlotPlan(
-                target_section_id=s.section_id,
-                slot_mappings=[
-                    SlotMapping(slot_id=slot.slot_id, status=MappingStatus.NEEDS_REVIEW, requires_human_review=True,
-                                note="Slot planner not implemented yet (Phase 8)")
-                    for slot in s.slots
-                ],
-            )
-            for s in template.sections
-        ],
-    )
+    section_plan = ctx.require(ArtifactKind.SECTION_PLAN, SectionPlan)
+    rules = ctx.latest(ArtifactKind.GWP_RULES, GwpRuleSet)
+    settings = ctx.settings
+    planner = SlotPlanner(source, template, section_plan, rules)
+    proposal = planner.propose()
+
+    origin, usage, model, prompt_version = PlanOrigin.RULE, {}, None, None
+    mode = getattr(settings, "slot_planner_llm", "confirm")
+    blocks = planner.blocks(proposal, getattr(settings, "slot_planner_block_tokens", 5000),
+                            getattr(settings, "slot_planner_preview_chars", 160))
+    if mode == "confirm" and ctx.chain_factory is not None and blocks:
+        try:
+            chain = ctx.chain_factory.create_structured_planner(SlotPlanCorrections, include_raw=True)
+            results = []
+            for block in blocks:
+                prompt = planner.prompt(proposal, block)
+                result = await run_slot_confirm(planner, proposal, block, chain, prompt, ctx.rate_limiter)
+                results.append((block, prompt, result))
+        except Exception as exc:  # the rule plan stands; its doubts stay marked for review
+            ctx.store.add_event(ctx.job.job_id, "slot_planner_llm_failed", SYSTEM_ACTOR, {"error": str(exc)[:500]})
+        else:
+            dropped: list[str] = []
+            for block, prompt, result in results:
+                dropped += planner.apply(proposal, block, result.corrections)
+                for k, v in result.usage.items():
+                    usage[k] = usage.get(k, 0) + v
+            origin, model, prompt_version = PlanOrigin.LLM, ctx.chain_factory.planner_label(), SLOT_PLANNER_PROMPT_VERSION
+            ctx.store.add_event(ctx.job.job_id, "slot_planner_llm", SYSTEM_ACTOR, {
+                "blocks": len(blocks),
+                "changes": sum(len(r.corrections.changes) for _, _, r in results),
+                "callouts": sum(len(r.corrections.callouts) for _, _, r in results),
+                "flags": sum(len(r.corrections.flags) for _, _, r in results),
+                "dropped": dropped[:20], "usage": usage,
+                "prompt_chars": [len(p) for _, p, _ in results],
+                "gwp_rules_in_prompt": sorted({r.rule_id for b, _, _ in results for r in planner.block_rules(b)}),
+            })
+    else:
+        reason = ("slot_planner_llm is off" if mode != "confirm" else "no LLM configured" if ctx.chain_factory is None
+                  else "nothing to check")
+        ctx.store.add_event(ctx.job.job_id, "slot_planner_rules_only", SYSTEM_ACTOR, {"reason": reason})
+
+    plan = planner.build_plan(proposal, ctx.job.job_id, ctx.next_version(ArtifactKind.SLOT_PLAN), origin)
+    plan = plan.model_copy(update={"prompt_version": prompt_version, "model": model, "token_usage": usage})
     ctx.write(ArtifactKind.SLOT_PLAN, plan)
+    ctx.write(ArtifactKind.QUALITY_REPORT, validate_slot_plan(plan, section_plan, source, template), scope="slot_plan")
     ctx.set_sections(SectionStatus.SLOT_PLANNED)
-    ctx.stub(JobStatus.PLANNING_SLOTS, 8)
+
+
+# ── Stubs (until their phase lands) ───────────────────────────────────
 
 
 def _stub(stage: JobStatus, phase: int, result: Optional[JobStatus] = None) -> Stage:
@@ -184,7 +222,7 @@ def default_stages() -> dict[JobStatus, Stage]:
     return {
         JobStatus.PARSING: parsing,
         JobStatus.PLANNING_SECTIONS: plan_sections,
-        JobStatus.PLANNING_SLOTS: plan_slots_stub,
+        JobStatus.PLANNING_SLOTS: plan_slots,
         JobStatus.DRAFTING: _stub(JobStatus.DRAFTING, 9),
         JobStatus.VALIDATING: _stub(JobStatus.VALIDATING, 10),
         JobStatus.REPAIRING: _stub(JobStatus.REPAIRING, 10),

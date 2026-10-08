@@ -19,6 +19,7 @@ from app.schemas.v2 import (
     RuleCheck,
     RuleOrigin,
     RuleStatus,
+    Severity,
     SourceDocument,
     SourceSection,
     SourceUnit,
@@ -55,7 +56,7 @@ def _doc() -> SourceDocument:
     sections = [
         ("SRC-0", "0", "PREAMBLE", ["Title | Good Writing"]),
         ("SRC-S01", None, "Table of Content", ["1 PURPOSE .... 3"]),
-        ("SRC-1", "1", "PURPOSE", ["This Guidance outlines writing."]),
+        ("SRC-1", "1", "GENERAL PRINCIPLES", ["This Guidance outlines writing."]),
         ("SRC-6.1", "6.1", "LANGUAGE AND WORDING", [
             'Do not use "please".', 'Prefer "confirm" or "verify" over "ensure".', "Write short sentences.",
         ]),
@@ -167,7 +168,59 @@ def test_baseline_rules_are_valid_approved_preservation_rules():
 
 def test_rule_input_skips_cover_toc_references_history():
     sections = [s.heading for s, _ in rule_input_sections(_doc())]
-    assert sections == ["PURPOSE", "LANGUAGE AND WORDING", "INFOGRAPHICS"]
+    assert sections == ["GENERAL PRINCIPLES", "LANGUAGE AND WORDING", "INFOGRAPHICS"]
+
+
+def test_rule_input_skips_the_guides_own_front_chapters():
+    """A guide's own PURPOSE/APPLICABILITY/ROLES chapters describe the guide; 'Articulate the purpose' is guidance."""
+    sections = [
+        SourceSection(section_id=f"SRC-{n}", number=num, heading=heading, level=level, section_order=i,
+                      units=[_unit(f"SRC-{n}", 1, i, "Text.")])
+        for i, (n, num, heading, level) in enumerate([
+            (1, "1", "PURPOSE", 1), (2, "2", "APPLICABILITY", 1), (3, "3", "DEFINITIONS & ABBREVIATIONS", 1),
+            (5, "5", "ROLES & RESPONSIBILITIES", 1), (7, "7", "GUIDANCE FOR SPECIFIC CHAPTERS", 1),
+            (71, "7.1", "ARTICULATE THE PURPOSE", 2), (72, "7.2", "SCOPE", 2), (99, None, "Infographics Description", 4),
+        ])
+    ]
+    doc = SourceDocument(document_id="GWP", source_file="gwp.pdf", file_type="pdf", sections=sections)
+    assert [s.heading for s, _ in rule_input_sections(doc)] == [
+        "GUIDANCE FOR SPECIFIC CHAPTERS", "ARTICULATE THE PURPOSE", "SCOPE", "Infographics Description",
+    ]
+
+
+def test_duplicate_and_ungrounded_candidates():
+    doc = _doc()
+    out = GwpExtractionOutput(rules=[
+        CandidateRule(category="STY", text="Use active voice in sentences to enhance clarity.", source_unit_ids=["SRC-1-U001"]),
+        CandidateRule(category="STY", text="Use active voice in sentences to enhance clarity and engagement.",
+                      severity="high", source_unit_ids=["SRC-6.1-U003"]),
+        CandidateRule(category="STY", text="Avoid jargon.", check="deterministic",
+                      params_json='{"kind": "forbidden_terms", "terms": ["jargon"]}', source_unit_ids=["SRC-6.1-U003"]),
+        CandidateRule(category="STY", text="Use must for mandatory steps.", check="deterministic",
+                      params_json='{"kind": "modality"}', source_unit_ids=["SRC-6.1-U003"]),
+        CandidateRule(category="FMT", text="Shade callouts.", check="deterministic",
+                      params_json='{"kind": "callout_palette", "colors": {"Attention": "#F5CDB9", "Key-take-away": "#FFFFFF"}}',
+                      source_unit_ids=["SRC-6.2-U001"]),
+        CandidateRule(category="FMT", text="Shade Attention boxes.", check="deterministic",
+                      params_json='{"kind": "callout_palette", "colors": {"Attention": "#F5CDB9"}}',
+                      source_unit_ids=["SRC-6.2-U001"]),
+    ])
+    rule_set, report = build_rule_set(doc, [out], "GWP", 1, build_batches(doc)[0].unit_ids)
+    guide = {r.text: r for r in rule_set.rules if r.origin == RuleOrigin.GUIDE}
+    active = guide["Use active voice in sentences to enhance clarity."]
+    assert "Use active voice in sentences to enhance clarity and engagement." not in guide  # merged
+    assert active.source_unit_ids == ["SRC-1-U001", "SRC-6.1-U003"] and active.severity == Severity.HIGH
+    assert any(d.reason.startswith("duplicate, merged into") for d in report.dropped)
+    by_id = {r.rule_id: r for r in rule_set.rules}
+    jargon = next(i for i, r in by_id.items() if r.text == "Avoid jargon.")
+    assert by_id[jargon].check == RuleCheck.SEMANTIC and "not quoted" in report.downgraded[jargon][0]
+    must = next(i for i, r in by_id.items() if r.text == "Use must for mandatory steps.")
+    assert "for preservation rules" in report.downgraded[must][0]
+    shade = next(i for i, r in by_id.items() if r.text == "Shade callouts.")
+    assert by_id[shade].params["colors"] == {"attention": "#F5CDB9", "key_takeaway": "#FFFFFF"}  # labels mapped to kinds
+    assert "FFFFFF" in report.downgraded[shade][0]  # a colour the guide never gives
+    boxes = next(i for i, r in by_id.items() if r.text == "Shade Attention boxes.")
+    assert by_id[boxes].check == RuleCheck.DETERMINISTIC
 
 
 def test_batches_keep_whole_sections_in_order():
@@ -245,14 +298,24 @@ def test_bad_params_json_is_reported():
 
 async def test_extractor_calls_llm_per_batch():
     doc = _doc()
-    chain = FakeChain([_output(), GwpExtractionOutput(), GwpExtractionOutput()])
+    first = GwpExtractionOutput(rules=[
+        CandidateRule(category="STY", text="Describe the purpose briefly.", source_unit_ids=["SRC-1-U001"]),
+        CandidateRule(category="STY", text="Do not use please.", source_unit_ids=["SRC-6.1-U001"]),
+    ])
+    chain = FakeChain([first, GwpExtractionOutput(), GwpExtractionOutput()])
     rule_set, report = await GwpRuleExtractor(chain, model_name="fake", max_chars=60).extract(doc, "GWP", 2, "Guide")
-    assert len(chain.calls) == 3
+    # 3 batches, then the coverage pass (2 calls at this tiny budget) for the units nobody cited or skipped
+    assert len(chain.calls) == 5
     system, human = chain.calls[1]
     assert "STR (placement" in system.content and "forbidden_terms" in system.content
     assert "ordered_procedure" in system.content  # content types listed
     assert "PART 2 of 3" in human.content and "[SRC-6.1-U001]" in human.content
     assert "[SRC-1-U001]" not in human.content
+    coverage = chain.calls[3][1].content
+    assert "COVERAGE CHECK" in coverage and ">> [SRC-6.1-U002]" in coverage  # uncovered: marked
+    assert "\n[SRC-6.1-U001]" in coverage  # cited in the first pass: context only
+    assert ">> [SRC-6.2-U001]" in chain.calls[4][1].content
+    assert "[SRC-1-U001]" not in coverage + chain.calls[4][1].content  # fully covered sections are not resent
     assert rule_set.version == 2 and report.version == 2
 
 

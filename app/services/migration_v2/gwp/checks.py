@@ -76,6 +76,38 @@ def check_params_problems(rule: GwpRule) -> list[str]:
     return problems
 
 
+# Check kinds that protect source content. A style, structure or formatting rule cannot use them:
+# a STY rule saying "use active voice" is not a modality check.
+PRESERVATION_KINDS = frozenset({"modality", "protected_values"})
+
+
+def grounding_problems(rule: GwpRule, cited_text: str) -> list[str]:
+    """Why a deterministic rule does not follow from the guide text it cites; empty when it does.
+
+    Catches checks that are well-formed but meaningless, e.g. ``forbidden_terms: ["jargon"]`` for
+    "avoid jargon", which would flag the word "jargon" instead of jargon.
+    """
+    if rule.check != RuleCheck.DETERMINISTIC:
+        return []
+    params: dict[str, Any] = rule.params or {}
+    kind = params.get("kind")
+    problems = []
+    if kind in PRESERVATION_KINDS and rule.category.value != "PRES":
+        problems.append(f"check kind {kind!r} is for preservation rules, not {rule.category.value}")
+    if kind == "forbidden_terms" and isinstance(params.get("terms"), list):
+        haystack = " ".join(cited_text.lower().split())
+        quoted = [t for t in params["terms"] if isinstance(t, str) and " ".join(t.lower().split()) in haystack]
+        missing = [t for t in params["terms"] if t not in quoted]
+        if missing:
+            problems.append(f"forbidden terms not quoted in the cited guide text: {missing}")
+    if kind == "callout_palette" and isinstance(params.get("colors"), dict):
+        haystack = cited_text.upper().replace("#", "")
+        invented = [str(c) for c in params["colors"].values() if str(c).upper().lstrip("#") not in haystack]
+        if invented:
+            problems.append(f"colours not quoted in the cited guide text: {invented}")
+    return problems
+
+
 def describe_check_kinds() -> str:
     """One line per kind, for prompts."""
     lines = []

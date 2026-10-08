@@ -554,3 +554,60 @@ Entry format:
   - Keep the thresholds unchanged.
   - Tests: inline citation → procedure; reference row → reference; "direct-to-site" → not scope; "This SOP applies to all sites" → scope.
   - The goldens and the RPAS split must still hold.
+
+## 2026-10-08: GWP rules extracted by the app (not hand-curated): done, pending human review
+- From the user: there are no further SOPs, templates or GWPs; start Phase 8 on the 3 samples. GWP writing rules must be **extracted by the application and passed to the LLM, never hard-coded**. Only preservation rules may be built in (values and document names unchanged). Saved as a memory.
+- State before: the sample rule set in `documents/GWP/` was hand-curated by Claude in Phase 4; the LLM extractor had never run on the real guide. Its candidates were also never used: rule selection takes approved rules only.
+- **First real extraction** (`gwp_extractor/1`, 2 batches of 16k chars): 12 guide rules, 54 of 119 guide passages neither cited nor skipped, and meaningless checks ("active voice" as a `modality` check, `forbidden_terms: ["idioms", "jargon"]`).
+- **Extractor fixes** (`gwp/extractor.py`, `gwp/checks.py`, `gwp/ingest.py`, prompt `gwp_extractor/2`):
+  - batches of 6k chars (4 calls on the guide);
+  - a **coverage pass**: passages the first pass neither cited nor skipped are sent again, marked `>>`, with their section as context;
+  - **grounding checks**: `forbidden_terms` must be quoted in the cited guide text; `callout_palette` colours must appear in it; `modality` and `protected_values` are for PRES rules only. Failing rules are downgraded to `semantic` and listed in the report;
+  - callout labels the guide uses ("Key-take-away", "Executive Summary/Introduction") are mapped to callout kinds;
+  - **duplicates merged** (same check and params, or at least 60% word overlap with the same category or shared citations), listed as dropped in the report;
+  - the guide's own top-level front chapters (Purpose, Applicability, Definitions, Implementation, Roles) are no longer rule input: they describe the guide itself and produced rules like "Include a section for 'Purpose' that outlines the focus on human learning principles".
+- **Result** (`BI-VQD-24416-G` v3 in the app's GWP store, status `in_review`): 70 candidate rules (16 STR, 24 STY, 30 FMT) plus the 6 baseline PRES rules; 103/103 rule-input passages cited or skipped; 2 duplicates merged; 3 checks downgraded (e.g. invented colours `#000000`/`#FFFFFF`). Copied to `documents/GWP/BI-VQD-24416-G_v3_rules.json` and `_v3_report.json`.
+  - Some near-duplicates remain for the reviewer (e.g. STY-007/STY-008 "focus on the central theme"; FMT-022/FMT-023 "do not overload with infographics").
+  - STY-005 reads "two lines" as **20** words (the curated set used 30). STY-019/020 give Flesch at least 30 and grade at most 12. STY-014 forbids "may" (PRES-004 still wins: "may" is flagged, never rewritten).
+- **New script** `scripts/extract_gwp.py`: registers a guide in the app's GWP store and runs parse, then LLM extraction, exactly as `POST /api/v1/gwp` + `/extract` (`--approve`, `--copy-to`).
+- The hand-curated files are renamed `documents/GWP/BI-VQD-24416-G_curated_{rules,report}.json`; only `tests/test_sample_gwp.py` reads them, as a reference. Superseded extraction versions v1 and v2 were deleted from the store.
+- Tests: `test_rule_input_skips_the_guides_own_front_chapters`, `test_duplicate_and_ungrounded_candidates`, coverage pass in `test_extractor_calls_llm_per_batch`.
+
+## 2026-10-08: Phase 8 (slot planner): done
+- **Contracts** (`plans.py`, CONTRACTS.md "Slot plans", `examples/slot_plan.json`):
+  - `SlotMapping.origin` (rule / llm / human) and `SlotMapping.rule_ids` (the approved STY, PRES and FMT rules the drafter applies, by content type, from the job's rule set);
+  - `SectionSlotPlan.region_choices` (`RegionChoice`: a source lead-in that answers an inline choice) and `notes`;
+  - `SlotPlan.prompt_version`, `model`, `token_usage`, `gwp_guide_id`, and `SlotPlan.section()`.
+- **Signals** (`planning/slot_signals.py`, zero tokens, nothing template-specific):
+  - concepts (what, intention, target roles, business units, geography, processes/systems, not covered) are activated by each slot's own key and instruction; their cue words are searched in the passages. A passage feeds its best slot, plus any slot whose concept it states clearly (one sentence naming roles, units and geography feeds all three, each with `extraction_scope`);
+  - whole tables by header and cells: abbreviations, terms, role tables, RACI tables (share of R/A/C/I/x cells); a legend table follows the table before it;
+  - icon rows: an icon passage plus its short label lines; matched to the section's icon slots **by position** when the counts agree;
+  - inline choices: "This SOP is applicable:" answers `p:32` with "SOP";
+  - only real data-table rows count as tables: BI-VQD-10505-S keeps its icon rows inside a layout table.
+- **Planner** (`planning/slot_planner.py`): rule proposal, then the LLM per block, then the plan.
+  - single-content-slot sections take everything; table-only sections place whole tables, with intro lines going to the table they introduce and figures left for the reviewer;
+  - rule callouts: source warning → `attention`, note → `explanation`; a fixed callout slot takes the passages promoted to its kind;
+  - the LLM sees only sections with doubts or where the template places callout boxes (PROCESS here). It may change slots inside a section, propose callouts (palette kinds only; consecutive text passages; an intro line takes its list), and flag. Invalid items get one repair, then are dropped. It cannot move passages between sections or empty a single-slot section;
+  - the GWP's **STR and FMT rules go into the prompt from the job's rule set** (logged as `gwp_rules_in_prompt`); none without a GWP;
+  - `migration_action`: `copy_verbatim` in placement mode and for table slots, else `extract_and_rewrite`;
+  - empty slots: required → `source_content_not_found`, optional → `not_applicable`, one-of groups as in the template.
+- **Budget** (`planning/budget.py`): about 4 chars per token; sections packed into blocks (5000 tokens by default, `slot_planner_block_tokens`); a large section splits at sub-section starts or before a non-list passage, so lists stay with their intro.
+- **Validator** (`planning/slot_validator.py`, report scope `slot_plan`): unaccounted passages, passages outside the section plan's scope, out-of-order slots and required slots neither filled nor flagged are gates; gaps, unplaced passages and review marks are listed.
+- **Stage, orchestrator, API:** `stages.plan_slots` replaces the stub (settings `slot_planner_llm`, `slot_planner_preview_chars`, `slot_planner_block_tokens`). Slot-plan approval is refused while gate issues are open (`PLAN_HAS_GATE_ISSUES`). `PATCH /slot-plan` returns the validation and marks changed slot mappings `human`; new `GET /slot-plan/validation`.
+- **Phase 7 fixes found on the way** (the agreed fix deferred on 2026-10-07, now tuned on the 3 samples since no others are coming):
+  - with the app-extracted GWP rules in its prompt, gpt-4o moved 028-BIS-00493's "6.1 GBS Solution: Methodology" (processes and countries in scope of the BPML) out of PROCESS into APPLICABILITY;
+  - `signals.py`: scope cues split into strong (applies to, binding for, valid for, not in scope...) and weak (sites, countries, "in scope"...), weak ones counting only next to a strong one; a document ID cited inside a prose sentence is a weak reference signal;
+  - `section_planner.py`: under a top-level chapter whose heading names its target, the LLM can no longer move a whole subsection the matcher had no doubt about; the move becomes a reviewer flag. Prompt `section_planner/6` says what APPLICABILITY takes and that GWP structural rules never justify moving a subsection out of its named chapter.
+- **Inspection** now runs the slot planner too: a "Slot plan" check, a slot table per section (status, action, passages, GWP rules per slot), callouts and region choices, a "GWP rules" section (which rules went to the prompt), and the golden slot expectations, expected-empty slots and callout suggestions. `--gwp-rules` previews candidate rules as approved and says so.
+- **Results on the 3 samples** (all golden checks PASS: section mapping, 34 slot expectations, 5 expected-empty slots):
+  - rules only and live (`gpt-4o-poc`, `slot_planner/2`), with and without the GWP; reports in `documents/reports/` (placement mode) and `documents/reports_gwp/` (GWP v3, candidates previewed);
+  - BI-VQD-10505-S: 4 icon rows by position, PLW in units, "World-wide" in geography; both "This SOP..." lead-ins → region choice "SOP";
+  - LLM callouts match golden suggestions for RPAS ("must not be automated with RPAS" → attention, "organized into 11 steps" → introduction) and, in most runs, BI-VQD-10505-S ("only use the information from the CoC" → attention);
+  - cost: 1–2 calls per SOP, about 3.5k–5.3k input and 200–300 output tokens (about 13.5k input tokens for the 3 SOPs).
+- **Tests:** `tests/test_v2_slot_planner.py` (23: signals, regions, icon rows, tables, one-of gaps, rule callouts, placement mode vs GWP actions and rule IDs, prompt contents from the job's rule set, LLM apply/validation/repair, single-slot guard, budget splitting, validator gates, stage with and without GWP, API review flow, golden match on samples and a golden negative); `tests/test_v2_slot_planner_live.py` (opt-in `llm`, placement mode and GWP); section-planner tests for the signal fix and the subsection guard. Full suite: 465 passed, 11 skipped (the 2 new live tests are opt-in). Live: 3 passed (use `PYTHONIOENCODING=utf-8` with `-s` on Windows).
+- **Open:**
+  - The 70 GWP candidate rules need human review before a migration can name the guide (USER_TASKS 3–5).
+  - gpt-4o still adds a few review flags of little value (e.g. "may need clarification" on PROCESS passages); they never change placements.
+  - Unplaced figures in DEFINITIONS (028-BIS-00493 Image 1) wait for a reviewer decision, as the golden review point says.
+  - Callout choices vary between runs (they are suggestions; the reviewer approves them with the slot plan).
+- **Next step:** Phase 9 (drafter). Placement mode copies per slot with `extraction_scope`; with a GWP the drafter rewrites using exactly the slot's `rule_ids` from the job's rule set, never built-in style text.

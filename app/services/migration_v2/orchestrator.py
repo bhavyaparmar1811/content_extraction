@@ -41,6 +41,7 @@ from app.stores.migration_store import MigrationStore
 from .artifacts import ArtifactWriter
 from .inputs import InputResolver, ResolvedInputs
 from .planning.section_validator import validate_section_plan
+from .planning.slot_validator import validate_slot_plan
 from .stages import SYSTEM_ACTOR, Stage, StageContext, default_stages
 
 # Default next status after each working stage (review gates are applied on top).
@@ -227,12 +228,14 @@ class Orchestrator:
             else (ArtifactKind.SLOT_PLAN, SlotPlan)
         )
         plan = self.artifacts.latest(job, kind, model)
-        if plan is not None and gate == JobStatus.SECTION_PLAN_REVIEW_PENDING:
-            blocking = self.section_plan_gate_issues(job, plan)
+        if plan is not None:
+            blocking = (self.section_plan_gate_issues(job, plan) if gate == JobStatus.SECTION_PLAN_REVIEW_PENDING
+                        else self.validate_slot_plan(job, plan).open_gate_issues)
             if blocking:
+                name = "section" if gate == JobStatus.SECTION_PLAN_REVIEW_PENDING else "slot"
                 raise JobStateError(
                     "PLAN_HAS_GATE_ISSUES",
-                    f"The section plan has {len(blocking)} blocking issue(s): " + " | ".join(i.message for i in blocking[:3]),
+                    f"The {name} plan has {len(blocking)} blocking issue(s): " + " | ".join(i.message for i in blocking[:3]),
                 )
         if plan is not None:  # record who approved, as a new immutable version
             approved = plan.model_copy(update={"version": self.store.next_artifact_version(job_id, kind), "approved_by": actor})
@@ -252,6 +255,15 @@ class Orchestrator:
 
     def section_plan_gate_issues(self, job: MigrationJob, plan: SectionPlan) -> list:
         return self.validate_section_plan(job, plan).open_gate_issues
+
+    def validate_slot_plan(self, job: MigrationJob, plan: SlotPlan, actor: Optional[str] = None) -> QualityReport:
+        """Validate a slot plan against the job's snapshots and its latest section plan, and save the report."""
+        source = self.artifacts.latest(job, ArtifactKind.SOURCE_MODEL, SourceDocument)
+        template = self.artifacts.latest(job, ArtifactKind.TEMPLATE_MODEL, TemplateModel)
+        section_plan = self.artifacts.latest(job, ArtifactKind.SECTION_PLAN, SectionPlan)
+        report = validate_slot_plan(plan, section_plan, source, template)
+        self.artifacts.write(job.job_id, ArtifactKind.QUALITY_REPORT, report, scope="slot_plan", created_by=actor)
+        return report
 
     def retry(self, job_id: str, from_stage: Optional[JobStatus], actor: Optional[str]) -> MigrationJob:
         job = self._job(job_id)

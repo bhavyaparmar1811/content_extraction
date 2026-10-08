@@ -1,8 +1,10 @@
 """LLM pass that turns a parsed GWP guide into a candidate ``GwpRuleSet``.
 
-The model proposes rules per batch of sections. Everything after that is
+The model proposes rules per batch of sections, then once more for the units
+the first pass neither cited nor skipped (coverage pass). Everything after that is
 deterministic: citations are checked against the input units, invalid
-deterministic params are downgraded to ``semantic``, duplicates are merged,
+deterministic params (malformed, or not grounded in the cited guide text) are
+downgraded to ``semantic``, duplicates are merged,
 IDs are assigned per category in guide order, and the built-in baseline
 preservation rules are added. Every correction is listed in the
 ``GwpExtractionReport`` for the reviewer.
@@ -20,6 +22,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from app.schemas.v2 import (
+    CalloutKind,
     ContentType,
     DroppedCandidate,
     GwpExtractionReport,
@@ -35,17 +38,20 @@ from app.schemas.v2 import (
     SourceUnit,
 )
 from app.services.llm.prompts.v2.gwp_extractor import (
+    GWP_COVERAGE_USER_PROMPT,
     GWP_EXTRACTOR_SYSTEM_PROMPT,
     GWP_EXTRACTOR_USER_PROMPT,
     PROMPT_VERSION,
 )
 
 from .baseline import BASELINE_IDS, baseline_rules
-from .checks import check_params_problems, describe_check_kinds
+from .checks import check_params_problems, describe_check_kinds, grounding_problems
 from .ingest import render_section, rule_input_sections
 
-# Characters of rendered guide text per LLM call. The sample guide (~25k chars) takes two calls.
-DEFAULT_BATCH_CHARS = 16_000
+# Characters of rendered guide text per LLM call. Larger batches made gpt-4o skim: on the sample guide
+# (~20k chars) two 16k batches gave 12 rules and left 54 of 119 units uncovered.
+DEFAULT_BATCH_CHARS = 6_000
+_SEP = "\n\n"
 
 
 # ── LLM output schema ─────────────────────────────────────────────────
@@ -118,6 +124,65 @@ def _parse_params(raw: str) -> tuple[dict[str, Any], Optional[str]]:
     return value, None
 
 
+_DEDUP_STOP = {"the", "a", "an", "and", "or", "of", "to", "in", "for", "with", "use", "by", "as", "be", "is", "are",
+               "that", "this", "it", "its", "on", "at", "from", "your", "you", "ensure", "document", "documents"}
+DUPLICATE_SIMILARITY = 0.6
+
+
+def _sig_words(text: str) -> set[str]:
+    words = _norm(text).split()
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words if w not in _DEDUP_STOP}
+
+
+def _check_params(rule: GwpRule) -> dict[str, Any]:
+    return {k: v for k, v in (rule.params or {}).items() if k != "note"}
+
+
+def _same_rule(a: GwpRule, b: GwpRule) -> bool:
+    """Two candidates state the same instruction: same deterministic check, or nearly the same words."""
+    if (a.check == b.check == RuleCheck.DETERMINISTIC and a.category == b.category
+            and _check_params(a) == _check_params(b)):
+        return True
+    wa, wb = _sig_words(a.text), _sig_words(b.text)
+    if not wa or not wb:
+        return False
+    similar = len(wa & wb) / len(wa | wb) >= DUPLICATE_SIMILARITY
+    return similar and (a.category == b.category or bool(set(a.source_unit_ids) & set(b.source_unit_ids)))
+
+
+_SEVERITY_ORDER = [Severity.INFO, Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
+
+
+def _merge(kept: GwpRule, twin: GwpRule, twin_check_valid: bool) -> None:
+    """Fold a duplicate into the rule already kept: union of citations, the stronger severity, a valid check."""
+    kept.source_unit_ids = list(dict.fromkeys(kept.source_unit_ids + twin.source_unit_ids))
+    kept.applies_to_content_types = list(dict.fromkeys(kept.applies_to_content_types + twin.applies_to_content_types))
+    if _SEVERITY_ORDER.index(twin.severity) > _SEVERITY_ORDER.index(kept.severity):
+        kept.severity = twin.severity
+    if kept.check != RuleCheck.DETERMINISTIC and twin_check_valid:
+        kept.check, kept.params = twin.check, twin.params
+
+
+_PALETTE_LABELS = (
+    (re.compile(r"intro|executive|summary", re.I), CalloutKind.INTRODUCTION),
+    (re.compile(r"explan", re.I), CalloutKind.EXPLANATION),
+    (re.compile(r"attention|warning|caution", re.I), CalloutKind.ATTENTION),
+    (re.compile(r"take\s*-?\s*a?\s*-?way|key", re.I), CalloutKind.KEY_TAKEAWAY),
+)
+
+
+def _normalize_palette(params: dict[str, Any]) -> dict[str, Any]:
+    """Map callout labels the guide uses ("Key-take-away", "Executive Summary/Introduction") to callout kinds."""
+    colors = params.get("colors") if params.get("kind") == "callout_palette" else None
+    if not isinstance(colors, dict):
+        return params
+    mapped: dict[str, Any] = {}
+    for label, value in colors.items():
+        kind = next((k.value for rx, k in _PALETTE_LABELS if rx.search(str(label))), str(label))
+        mapped[kind] = value
+    return {**params, "colors": mapped}
+
+
 def build_rule_set(
     doc: SourceDocument,
     outputs: list[GwpExtractionOutput],
@@ -129,6 +194,7 @@ def build_rule_set(
     """Validate and number the model's candidates, then add the baseline rules."""
     known = set(input_unit_ids)
     seq: dict[str, int] = {u.unit_id: u.seq for u in doc.iter_units()}
+    text_of: dict[str, str] = {u.unit_id: u.text for u in doc.iter_units()}
     report = GwpExtractionReport(
         guide_id=guide_id, version=version, prompt_version=PROMPT_VERSION, model=model,
         input_unit_ids=list(input_unit_ids),
@@ -161,6 +227,7 @@ def build_rule_set(
                 continue
 
             params, parse_error = _parse_params(cand.params_json)
+            params = _normalize_palette(params)
             rule = GwpRule(
                 rule_id=f"{cand.category.value}-000",  # renumbered below
                 category=cand.category,
@@ -174,9 +241,20 @@ def build_rule_set(
                 origin=RuleOrigin.GUIDE,
             )
             problems = ([parse_error] if parse_error else []) + check_params_problems(rule)
+            if not problems:
+                problems = grounding_problems(rule, " ".join(text_of.get(i, "") for i in ids))
             if problems and rule.check == RuleCheck.DETERMINISTIC:
                 rule.check = RuleCheck.SEMANTIC
                 pending_problems[id(rule)] = problems
+            kept = next((d for d in drafts if _same_rule(d, rule)), None)
+            if kept is not None:  # the guide states it twice (e.g. a summary list and a detailed chapter)
+                was_deterministic = kept.check == RuleCheck.DETERMINISTIC
+                _merge(kept, rule, rule.check == RuleCheck.DETERMINISTIC and not problems)
+                if kept.check == RuleCheck.DETERMINISTIC and not was_deterministic:
+                    pending_problems.pop(id(kept), None)  # the duplicate brought a valid check
+                report.dropped.append(DroppedCandidate(text=text, reason=f"duplicate, merged into: {kept.text[:120]}"))
+                by_key[key] = kept
+                continue
             by_key[key] = rule
             drafts.append(rule)
 
@@ -223,21 +301,56 @@ class GwpRuleExtractor:
         return GWP_EXTRACTOR_SYSTEM_PROMPT.format(
             content_types=", ".join(ct.value for ct in ContentType),
             check_kinds=describe_check_kinds(),
+            callout_kinds=", ".join(k.value for k in CalloutKind),
         )
 
+    async def _call(self, system: SystemMessage, content: str) -> GwpExtractionOutput:
+        result = await self.chain.ainvoke([system, HumanMessage(content=content)])
+        return result if isinstance(result, GwpExtractionOutput) else GwpExtractionOutput.model_validate(result)
+
     async def extract(self, doc: SourceDocument, guide_id: str, version: int, guide_title: str = "") -> tuple[GwpRuleSet, GwpExtractionReport]:
+        title = guide_title or doc.source_file
         batches = build_batches(doc, self.max_chars)
         system = SystemMessage(content=self.system_prompt())
         outputs: list[GwpExtractionOutput] = []
         for index, batch in enumerate(batches, start=1):
-            human = HumanMessage(content=GWP_EXTRACTOR_USER_PROMPT.format(
-                guide_title=guide_title or doc.source_file,
-                batch_index=index,
-                batch_count=len(batches),
-                units="\n\n".join(batch.parts),
-            ))
             logger.info(f"GWP rule extraction {guide_id} v{version}: batch {index}/{len(batches)} ({batch.chars} chars)")
-            result = await self.chain.ainvoke([system, human])
-            outputs.append(result if isinstance(result, GwpExtractionOutput) else GwpExtractionOutput.model_validate(result))
+            outputs.append(await self._call(system, GWP_EXTRACTOR_USER_PROMPT.format(
+                guide_title=title, batch_index=index, batch_count=len(batches), units=_SEP.join(batch.parts),
+            )))
         input_ids = [i for b in batches for i in b.unit_ids]
+        uncovered = set(input_ids) - _accounted(outputs)
+        coverage = build_coverage_batches(doc, uncovered, self.max_chars)
+        for index, part in enumerate(coverage, start=1):
+            logger.info(f"GWP rule extraction {guide_id} v{version}: coverage pass {index}/{len(coverage)} "
+                        f"({len(uncovered)} uncovered units)")
+            outputs.append(await self._call(system, GWP_COVERAGE_USER_PROMPT.format(guide_title=title, units=part)))
         return build_rule_set(doc, outputs, guide_id, version, input_ids, model=self.model_name)
+
+
+def _accounted(outputs: list[GwpExtractionOutput]) -> set[str]:
+    """Unit IDs cited by a candidate rule or listed as skipped."""
+    ids: set[str] = set()
+    for output in outputs:
+        ids.update(i for rule in output.rules for i in rule.source_unit_ids)
+        ids.update(i for skip in output.skipped for i in skip.source_unit_ids)
+    return ids
+
+
+def build_coverage_batches(doc: SourceDocument, uncovered: set[str], max_chars: int = DEFAULT_BATCH_CHARS) -> list[str]:
+    """Sections holding uncovered units, rendered with '>>' on those units and the rest as context."""
+    parts: list[str] = []
+    current: list[str] = []
+    size = 0
+    for section, units in rule_input_sections(doc):
+        if not uncovered.intersection(u.unit_id for u in units):
+            continue
+        text = render_section(section, units, marked=uncovered)
+        if current and size + len(text) > max_chars:
+            parts.append(_SEP.join(current))
+            current, size = [], 0
+        current.append(text)
+        size += len(text)
+    if current:
+        parts.append(_SEP.join(current))
+    return parts

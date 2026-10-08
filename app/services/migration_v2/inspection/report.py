@@ -233,14 +233,91 @@ def _template_section(insp: Inspection) -> str:
     )
 
 
+def _slot_section(insp: Inspection) -> str:
+    plan, report = insp.slot_plan, insp.slot_report
+    units = {u.unit_id: u for u in insp.source.iter_units()}
+    tpl = {t.section_id: t for t in insp.template.model.sections}
+    status_cls = {MappingStatus.MAPPED: PASS, MappingStatus.NEEDS_REVIEW: WARN, MappingStatus.SOURCE_CONTENT_NOT_FOUND: WARN}
+    parts = []
+    for section in plan.sections:
+        target = tpl[section.target_section_id]
+        slots = {s.slot_id: s for s in target.slots}
+        rows = []
+        for m in section.slot_mappings:
+            slot = slots.get(m.slot_id)
+            passages = "".join(
+                f'<div><span class="mono">{escape(u)}</span> {escape(units[u].text[:110]) if u in units else ""}'
+                f'{"…" if u in units and len(units[u].text) > 110 else ""}</div>' for u in m.source_unit_ids[:4])
+            if len(m.source_unit_ids) > 4:
+                passages += f"<div class='muted'>+ {len(m.source_unit_ids) - 4} more passage(s)</div>"
+            rules = (f"<details><summary>{len(m.rule_ids)}</summary><span class='mono'>{escape(', '.join(m.rule_ids))}</span>"
+                     "</details>") if m.rule_ids else "<span class='muted'>—</span>"
+            scope = f"<br><span class='tag'>part: {escape(', '.join(m.extraction_scope))}</span>" if m.extraction_scope else ""
+            rows.append(
+                f"<tr><td><b>{escape(slot.key if slot and slot.key else m.slot_id)}</b><br>"
+                f"<span class='muted'>{escape(slot.content_type.value if slot else '')}{' · required' if slot and slot.required else ''}"
+                f"</span></td><td>{_badge(status_cls.get(m.status, INFO))} {escape(m.status.value)}</td>"
+                f"<td>{escape(m.migration_action.value)}{scope}</td><td>{escape(m.origin.value)}</td>"
+                f"<td>{passages or '<span class=muted>—</span>'}</td><td>{rules}</td><td>{escape(m.note or '')}</td></tr>")
+        extras = []
+        for a in section.callout_assignments:
+            extras.append(f"<li>callout <b>{escape(a.kind.value)}</b> ({escape(a.origin.value)}): "
+                          f"<span class='mono'>{escape(', '.join(a.unit_ids))}</span> — {escape(a.reason)}</li>")
+        for r in section.region_choices:
+            extras.append(f"<li>template choice {escape(r.region_id)} answered by <span class='mono'>{escape(', '.join(r.unit_ids))}"
+                          f"</span>: <b>{escape(r.choice or '?')}</b></li>")
+        extras += [f"<li>{escape(n)}</li>" for n in section.notes]
+        parts.append(
+            f"<h3>{escape(target.key or target.section_id)} — {escape(target.heading)}</h3>"
+            "<table><tr><th>Slot</th><th>Status</th><th>Action</th><th>Decided by</th><th>Passages</th>"
+            "<th>GWP rules for the drafter</th><th>Note</th></tr>" + "".join(rows) + "</table>"
+            + (f"<ul class='details'>{''.join(extras)}</ul>" if extras else ""))
+    issues = "".join(
+        f"<tr><td>{_badge(FAIL if i.gate else WARN)}</td><td>{escape(i.gate.value if i.gate else '')}</td>"
+        f"<td>{escape(i.message)}</td></tr>" for i in report.issues
+    ) or '<tr><td colspan="3" class="muted">No validation issues.</td></tr>'
+    usage = plan.token_usage
+    meta = (f"origin <b>{escape(plan.origin.value)}</b>, GWP rule set {escape(plan.gwp_guide_id or 'none')}"
+            + (f", model {escape(plan.model or '')}, prompt {escape(plan.prompt_version or '')}, tokens {escape(str(usage))}"
+               if usage else ""))
+    return (f"<p class='muted'>Slot plan {meta}. Unit coverage {report.unit_coverage * 100:.0f}%.</p>" + "".join(parts)
+            + "<h3>Validation</h3><table><tr><th></th><th>Gate</th><th>Issue</th></tr>" + issues + "</table>")
+
+
+def _gwp_section(insp: Inspection) -> str:
+    rules = insp.rules
+    used = {r for e in insp.events if e["event"] == "slot_planner_llm" for r in e["detail"].get("gwp_rules_in_prompt", [])}
+    preview = (f"<p><b>Preview:</b> {insp.gwp_candidates_previewed} candidate rule(s) not yet approved by a reviewer are "
+               "treated as approved here. A real migration uses only approved rules.</p>") if insp.gwp_candidates_previewed else ""
+    if rules.guide_id == "BASELINE":
+        head = ("<p>No GWP for this run: <b>placement mode</b>. Content goes into the slots as written; only the built-in "
+                "preservation rules apply.</p>")
+    else:
+        head = (f"<p>Rules extracted from the guide <b>{escape(rules.guide_id)}</b> v{rules.version} "
+                f"({escape(rules.source_file or '')}). Structure and formatting rules go to the slot planner's LLM "
+                f"(marked <span class='tag'>prompt</span> when sent in this run); every slot lists the style, preservation "
+                "and formatting rules the drafter will apply.</p>")
+    rows = "".join(
+        f"<tr><td class='mono'>{escape(r.rule_id)}{' <span class=tag>prompt</span>' if r.rule_id in used else ''}</td>"
+        f"<td>{escape(r.origin.value)}</td><td>{escape(r.status.value)}</td><td>{escape(r.check.value)}</td>"
+        f"<td>{escape(', '.join(c.value for c in r.applies_to_content_types) or 'all')}</td><td>{escape(r.text)}</td></tr>"
+        for r in rules.rules)
+    return (head + preview + "<details><summary>" + f"{len(rules.rules)} rules" + "</summary><table><tr><th>Rule</th>"
+            "<th>Origin</th><th>Status</th><th>Check</th><th>Content types</th><th>Text</th></tr>" + rows + "</table></details>")
+
+
 def _golden_section(insp: Inspection) -> str:
     if insp.golden is None:
         return "<p class='muted'>No golden expectation exists for this SOP.</p>"
     rows = "".join(f"<tr><td>{escape(r.get('source_heading') or '—')}</td><td>{escape(r.get('target_heading') or '')}</td>"
                    f"<td>{escape(r.get('mapping_type') or '')}</td></tr>" for r in insp.golden.get("section_mapping", []))
-    problems = "".join(f"<li>{escape(p)}</li>" for p in insp.golden_problems + insp.missing_preserve)
-    return ((f"<ul>{problems}</ul>" if problems else "<p>The plan matches the golden mapping.</p>")
-            + "<table><tr><th>Golden: SOP heading</th><th>Template section</th><th>Type</th></tr>" + rows + "</table>")
+    problems = "".join(f"<li>{escape(p)}</li>" for p in insp.golden_problems + insp.golden_slot_problems + insp.missing_preserve)
+    callouts = "".join(f"<tr><td>{escape(text[:120])}</td><td>{escape(kind)}</td><td>{escape(got)}</td></tr>"
+                       for text, kind, got in insp.golden_callouts)
+    return ((f"<ul>{problems}</ul>" if problems else "<p>The plans match the golden mapping, slot placements and empty slots.</p>")
+            + "<table><tr><th>Golden: SOP heading</th><th>Template section</th><th>Type</th></tr>" + rows + "</table>"
+            + ("<h3>Callout suggestions (informational: a reviewer may disagree)</h3><table><tr><th>Passage</th>"
+               "<th>Golden suggests</th><th>Plan</th></tr>" + callouts + "</table>" if callouts else ""))
 
 
 def render(insp: Inspection) -> str:
@@ -248,7 +325,8 @@ def render(insp: Inspection) -> str:
     c = insp.completeness
     missing = "".join(f"<li>{escape(x)}</li>" for x in c.missing_context) or "<li class='muted'>Nothing lost.</li>"
     gwp = (f"{escape(insp.rules.guide_id)} v{insp.rules.version}, {len(insp.rules.rules)} rules"
-           if insp.rules.guide_id != "BASELINE" else "none (built-in preservation rules only)")
+           + (" (candidates previewed as approved)" if insp.gwp_candidates_previewed else "")
+           if insp.rules.guide_id != "BASELINE" else "none: placement mode (built-in preservation rules only)")
     artifacts = "".join(f'<li><a href="{escape(p.name)}">{escape(name)}</a></li>' for name, p in sorted(insp.artifacts.items()))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -256,12 +334,15 @@ def render(insp: Inspection) -> str:
 <body><header><h1>{_badge(status)} {escape(insp.sop_path.name)}</h1>
 <div class="meta">Template: {escape(insp.template.path.name)} · GWP: {gwp} ·
 LLM check: {'on' if insp.llm else 'off'} · Generated {datetime.now():%Y-%m-%d %H:%M}</div>
-<nav><a href="#checks">Checks</a><a href="#plan">Section plan</a><a href="#outline">SOP passages</a>
+<nav><a href="#checks">Checks</a><a href="#plan">Section plan</a><a href="#slots">Slot plan</a><a href="#gwp">GWP rules</a>
+<a href="#outline">SOP passages</a>
 <a href="#facts">Protected facts</a><a href="#template">Template</a><a href="#text">Text completeness</a>
 <a href="#golden">Golden</a><a href="#files">Files</a><a href="../index.html">All SOPs</a></nav></header>
 <main>
 <h2 id="checks">Checks</h2>{_checks_table(insp.checks)}
 <h2 id="plan">Section plan (SOP sections → template sections)</h2>{_plan_section(insp)}
+<h2 id="slots">Slot plan (passages → template slots)</h2>{_slot_section(insp)}
+<h2 id="gwp">GWP rules</h2>{_gwp_section(insp)}
 <h2 id="outline">SOP passages, as extracted</h2>{_outline_section(insp)}
 <h2 id="facts">Protected facts</h2>{_facts_section(insp)}
 <h2 id="template">Template</h2>{_template_section(insp)}

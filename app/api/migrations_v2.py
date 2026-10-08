@@ -254,7 +254,11 @@ async def get_slot_plan(job_id: str, request: Request):
 
 @router.patch("/{job_id}/slot-plan")
 async def patch_slot_plan(job_id: str, plan: SlotPlan, request: Request, user: dict = Depends(require_user)):
-    """Save a reviewer's edited slot plan as a new version. Only while the job waits for slot-plan review."""
+    """Save a reviewer's edited slot plan as a new version, and validate it. Only while the job waits for slot-plan review.
+
+    Slot mappings that differ from the previous version are marked ``origin: human``. The response carries
+    the validation report under ``validation``; issues with a gate block approval until fixed.
+    """
     orch = _orchestrator(request)
     job = _job(orch, job_id)
     if job.status != JobStatus.SLOT_PLAN_REVIEW_PENDING:
@@ -263,12 +267,35 @@ async def patch_slot_plan(job_id: str, plan: SlotPlan, request: Request, user: d
     problems = slot_plan_problems(plan, source, template)
     if problems:
         raise _invalid(problems, "SLOT_PLAN_INVALID")
+    previous = orch.artifacts.latest(job, ArtifactKind.SLOT_PLAN, SlotPlan)
+    before = {_slot_key(s.target_section_id, m) for s in previous.sections for m in s.slot_mappings} if previous else set()
+    sections = [
+        s.model_copy(update={"slot_mappings": [
+            m if _slot_key(s.target_section_id, m) in before else m.model_copy(update={"origin": MappingOrigin.HUMAN})
+            for m in s.slot_mappings
+        ]})
+        for s in plan.sections
+    ]
     saved = plan.model_copy(update={
         "job_id": job_id, "version": orch.store.next_artifact_version(job_id, ArtifactKind.SLOT_PLAN),
-        "origin": PlanOrigin.HUMAN, "approved_by": None,
+        "origin": PlanOrigin.HUMAN, "approved_by": None, "sections": sections,
     })
     orch.artifacts.write(job_id, ArtifactKind.SLOT_PLAN, saved, created_by=_actor(user))
-    return saved.to_clean_dict()
+    report = orch.validate_slot_plan(orch.store.get_job(job_id), saved, _actor(user))
+    return {**saved.to_clean_dict(), "validation": report.to_clean_dict()}
+
+
+def _slot_key(target_section_id: str, mapping) -> str:
+    return target_section_id + mapping.model_dump_json(include={"slot_id", "source_unit_ids", "status", "migration_action",
+                                                                "extraction_scope"})
+
+
+@router.get("/{job_id}/slot-plan/validation")
+async def get_slot_plan_validation(job_id: str, request: Request):
+    """The latest validation report of the slot plan (gate issues block approval)."""
+    orch = _orchestrator(request)
+    job = _job(orch, job_id)
+    return _latest(orch, job, ArtifactKind.QUALITY_REPORT, QualityReport, scope="slot_plan").to_clean_dict()
 
 
 @router.post("/{job_id}/slot-plan/approve")

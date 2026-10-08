@@ -110,12 +110,21 @@ _PURPOSE = re.compile(
     r"|\bpurpose\b|\bobjective\b|\baims?\s+to\b|\bintention\b|\bit\s+describes\b",
     re.I,
 )
-_SCOPE = re.compile(
-    r"\b(?:applicab\w*|applies|apply\s+to|in\s+scope|out\s+of\s+scope|not\s+in\s+scope|scope|binding\s+for|world-?wide"
-    r"|globally|employees|contractors|sites?|divisions?|business\s+units?|departments?|geograph\w*|regions?|countries"
-    r"|is\s+valid\s+for|does\s+not\s+apply|not\s+covered)\b",
+# Scope: strong cues say to whom or where THIS document applies. Weak cues (sites, countries, "in scope")
+# also describe a procedure's own subject matter ("country scope in the BPML", "direct-to-site shipment"),
+# so they only add weight next to a strong cue.
+_SCOPE_STRONG = re.compile(
+    r"\b(?:applicab\w*|applies|apply\s+to|out\s+of\s+scope|not\s+in\s+scope|binding\s+for|is\s+valid\s+for"
+    r"|does\s+not\s+apply|not\s+covered)\b",
     re.I,
 )
+_SCOPE_WEAK = re.compile(
+    r"\b(?:in\s+scope|scope|world-?wide|globally|employees|contractors|sites?|divisions?|business\s+units?"
+    r"|departments?|geograph\w*|regions?|countries)\b",
+    re.I,
+)
+_WORD = re.compile(r"[A-Za-z]+")
+CITATION_MAX_WORDS = 8  # a passage longer than this that cites a document ID is prose citing it, not a reference entry
 _PREREQ = re.compile(
     r"\b(?:pre-?requisites?|prior\s+to|before\s+(?:starting|using|the\s+start)|effective\s+date|implement\w*"
     r"|transition\s+(?:period|plan)|curricul\w+|be\s+in\s+place|periodic\s+review)\b",
@@ -187,13 +196,16 @@ def unit_labels(unit: SourceUnit, own_ids: frozenset[str] = frozenset()) -> dict
     if own:
         raw["associated_document"] += 2
     elif refs:
-        raw["reference"] += 1.5 if len(text) < 200 else 0.4
+        prose = len(_WORD.findall(text)) > CITATION_MAX_WORDS and unit.unit_type not in (UnitType.REFERENCE, UnitType.TABLE_ROW)
+        raw["reference"] += 0.4 if prose else 1.5
+        if prose:  # "as described in BI-VQD-10581-S": the sentence is about something else
+            raw["supporting_information"] += 0.6
 
     if _PURPOSE.search(text):
         raw["purpose"] += 1
-    scope_hits = len(_SCOPE.findall(text))
-    if scope_hits:
-        raw["scope"] += min(1.5, 0.6 * scope_hits)
+    strong_scope = len(_SCOPE_STRONG.findall(text))
+    if strong_scope:
+        raw["scope"] += min(1.5, 0.6 * strong_scope + 0.2 * len(_SCOPE_WEAK.findall(text)))
     if _PREREQ.search(text):
         raw["prerequisite"] += 0.8
     if _RESP.search(text):

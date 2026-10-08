@@ -280,12 +280,34 @@ class SectionPlanner:
                         f"{proposal.id_to_key[decision.target_id]} by name, so the whole section stays there; "
                         "move single units with unit_ids if some of them belong elsewhere"
                     )
+            for section_id in change.source_section_ids if not change.unit_ids else []:
+                root = self._named_root(section_id, proposal)
+                decision = proposal.decisions.get(section_id)
+                if (root is not None and decision is not None and not decision.check and not decision.moved_from
+                        and keys.get(change.target_key or "") != proposal.decisions[root].target_id):
+                    problems.append(
+                        f"{where}: {section_id} '{self.by_id[section_id].heading}' is under "
+                        f"'{self.by_id[root].heading}', which matches {proposal.id_to_key[proposal.decisions[root].target_id]} "
+                        "by name, and the matcher had no doubt about it; flag it instead, or move single units with unit_ids"
+                    )
             if change.unit_ids:
                 own = {u.unit_id for s in change.source_section_ids if s in self.by_id for u in self.sb.subtree_units(self.by_id[s])}
                 stray = [u for u in change.unit_ids if u not in own]
                 if stray:
                     problems.append(f"{where}: unit_ids {stray} are not in the listed sections")
         return problems
+
+    def _named_root(self, section_id: str, proposal: Proposal) -> Optional[str]:
+        """The top-level ancestor of a subsection when that ancestor matches its target by name; else None."""
+        node = self.by_id.get(section_id)
+        if node is None or not node.parent_id:
+            return None
+        while node.parent_id and node.parent_id in self.by_id:
+            node = self.by_id[node.parent_id]
+        decision, sig = proposal.decisions.get(node.section_id), proposal.signals.get(node.section_id)
+        if decision is None or sig is None or decision.kind != "mapped" or sig.name.get(decision.target_id, 0.0) < 1.0:
+            return None
+        return node.section_id
 
     def is_noop(self, proposal: Proposal, change: SectionChange) -> bool:
         """A 'change' that restates the proposal (the same target for whole sections)."""
@@ -508,11 +530,13 @@ async def run_confirm(planner: SectionPlanner, proposal: Proposal, chain: Any, p
         bad = _bad_indexes(problems)
         # A move dropped only because it named passages the model never saw still carries a hunch:
         # keep it for the reviewer as a flag on the (real) sections it named.
-        guessed = {int(m.group(1)) for p in problems if (m := re.match(r"changes\[(\d+)\]: unit_ids .* not in the listed", p))}
+        # The same for a whole-subsection move out of a chapter its heading places (the matcher had no doubt).
+        hunch = re.compile(r"changes\[(\d+)\]: (?:unit_ids .* not in the listed|\S+ '.*' is under ')")
+        guessed = {int(m.group(1)) for p in problems if (m := hunch.match(p))}
         flags = list(corrections.flags)
         already = {s for f in flags for s in f.source_section_ids}
         for i in sorted(guessed):
-            if i >= len(corrections.changes) or any(p.startswith(f"changes[{i}]:") and "unit_ids" not in p for p in problems):
+            if i >= len(corrections.changes) or any(p.startswith(f"changes[{i}]:") and not hunch.match(p) for p in problems):
                 continue
             change = corrections.changes[i]
             sections = [s for s in change.source_section_ids if s in planner.by_id]

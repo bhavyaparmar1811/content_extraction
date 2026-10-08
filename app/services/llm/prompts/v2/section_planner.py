@@ -5,7 +5,7 @@ section from its name and its content. The model only checks that proposal
 and returns corrections, so input and output stay small.
 """
 
-PROMPT_VERSION = "section_planner/5"
+PROMPT_VERSION = "section_planner/6"
 
 SECTION_PLANNER_SYSTEM_PROMPT = """You review a proposed mapping of a source procedure document (SOP) onto the sections of a new template.
 
@@ -36,6 +36,10 @@ Rules:
 - mapping_type: one_to_one, merge, split (part of a source section goes elsewhere), move, omit, unresolved.
 - Lines marked [CHECK] are the matcher's doubts and [MOVED] its relocations: decide them, using the unit previews.
 - A section whose heading names the template section (e.g. 'PURPOSE' → PURPOSE) stays there as a whole.
+- APPLICABILITY takes statements about to whom or where THIS document applies. Procedure content that mentions
+  processes, systems, countries or sites as its subject matter (e.g. 'processes in scope of the master list', 'country rollout') stays in PROCESS.
+- STRUCTURAL WRITING RULES, when given, describe what each template section should contain. Use them to decide close
+  calls; they are never a reason to move a subsection out of the chapter whose heading names its target.
 - Return ONLY corrections and flags; do not restate proposals you agree with. If all is right, return empty lists."""
 
 SECTION_PLANNER_USER_PROMPT = """TEMPLATE SECTIONS (key | heading | required | expected content)

@@ -21,7 +21,14 @@
             "responsibility"
           ],
           "migration_action": "extract_and_consolidate",
-          "status": "mapped"
+          "status": "mapped",
+          "origin": "rule",
+          "rule_ids": [
+            "PRES-001",
+            "PRES-002",
+            "PRES-004",
+            "STY-002"
+          ]
         },
         {
           "slot_id": "TGT-3-STEPS",
@@ -37,7 +44,14 @@
           ],
           "migration_action": "rewrite_as_ordered_procedure",
           "ordering_rule": "preserve_source_order",
-          "status": "mapped"
+          "status": "mapped",
+          "origin": "llm",
+          "rule_ids": [
+            "PRES-001",
+            "PRES-002",
+            "PRES-004",
+            "STY-002"
+          ]
         },
         {
           "slot_id": "TGT-3-TIMING",
@@ -49,7 +63,14 @@
             "timing",
             "deadline"
           ],
-          "status": "mapped"
+          "status": "mapped",
+          "origin": "rule",
+          "rule_ids": [
+            "PRES-001",
+            "PRES-002",
+            "PRES-004",
+            "STY-002"
+          ]
         },
         {
           "slot_id": "TGT-3-INPUTS",
@@ -66,7 +87,17 @@
           "origin": "rule",
           "reason": "Source unit is typed as a warning."
         }
-      ]
+      ],
+      "region_choices": [],
+      "notes": []
     }
-  ]
+  ],
+  "prompt_version": "slot_planner/2",
+  "model": "azure/gpt-4o-poc",
+  "token_usage": {
+    "calls": 1,
+    "input_tokens": 2800,
+    "output_tokens": 210
+  },
+  "gwp_guide_id": "BI-VQD-24416-G"
 }

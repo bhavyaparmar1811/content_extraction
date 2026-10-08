@@ -589,3 +589,47 @@ def test_pdf_front_matter_before_chapter_one_is_omitted():
     assert {"SRC-0", "SRC-S01", "SRC-S02", "SRC-2.1"} <= omitted
     assert _by_target(plan)["TGT-5"].source_section_ids == ["SRC-2"]
     assert validate_section_plan(plan, doc, tpl).open_gate_issues == []
+
+
+async def test_whole_subsection_move_out_of_a_named_chapter_becomes_a_flag():
+    """GWP structural rules once led gpt-4o to move 'Processes in scope of the BPML' (under PROCEDURE) to APPLICABILITY."""
+    doc, tpl = sop(), template()
+    planner = SectionPlanner(doc, tpl)
+    proposal = planner.propose()
+    assert not proposal.decisions["SRC-6.1"].check
+    move = SectionPlanCorrections(changes=[SectionChange(
+        source_section_ids=["SRC-6.1"], target_key="APPLICABILITY", mapping_type=MappingType.MOVE,
+        reason="mentions processes in scope")])
+    result = await run_confirm(planner, proposal, FakeChain(move), planner.prompt(proposal))
+    assert result.corrections.changes == [] and "is under 'PROCEDURE'" in result.problems[0]
+    assert [f.source_section_ids for f in result.corrections.flags] == [["SRC-6.1"]]
+    planner.apply(proposal, result.corrections)
+    plan = planner.build_plan(proposal, "J", 1)
+    assert "SRC-6.1" in _by_target(plan)["TGT-5"].source_section_ids
+    assert _by_target(plan)["TGT-5"].status == MappingStatus.NEEDS_REVIEW
+
+
+def _unit(text: str, kind: str = "paragraph", table_ref=None) -> SourceUnit:
+    return SourceUnit(unit_id="U", content_hash="h", section_id="S", seq=0, unit_type=UnitType(kind), text=text,
+                      table_ref=table_ref)
+
+
+def _top(labels: dict[str, float]) -> str:
+    return max(labels, key=labels.get)
+
+
+def test_inline_citations_and_weak_scope_words_are_not_scope_or_reference():
+    """The 2026-10-07 BI-VQD-10505-S false positive: procedure text read as reference and scope content."""
+    step = _unit("The DM creates a shipping order in the EVA system as described in BI-VQD-10581-S.", "procedure_step")
+    assert _top(unit_labels(step)) == "ordered_procedure"
+    prose = _unit("The shipping documents are filed by the DM as per BI-VQD-176305-S in the archive.")
+    assert _top(unit_labels(prose)) != "reference"
+    row = _unit("1 | BI-VQD-10433 | Validation Framework", "table_row",
+                TableRef(table_id="T", row_index=1, header_cells=["No.", "Document-ID", "Title"],
+                         cells=[TableCell(col=0, text="1"), TableCell(col=1, text="BI-VQD-10433")]))
+    assert _top(unit_labels(row)) == "reference"
+    assert _top(unit_labels(_unit("BI-VQD-10433 Validation Framework"))) == "reference"
+    assert "scope" not in unit_labels(_unit("Direct-to-site shipments are prepared by the shipping team."))
+    assert "scope" not in unit_labels(_unit("The country scope in the BPML lists the sites per process."))
+    assert _top(unit_labels(_unit("This SOP applies to all sites."))) == "scope"
+    assert _top(unit_labels(_unit("Machine learning bots are not in scope."))) == "scope"

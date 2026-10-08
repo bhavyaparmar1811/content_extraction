@@ -42,7 +42,8 @@ def _issue(key: str, severity: Severity, category: IssueCategory, message: str, 
     )
 
 
-def _covered_units(mapping, source_units: dict[str, list[str]]) -> list[str]:
+def covered_units(mapping, source_units: dict[str, list[str]]) -> list[str]:
+    """Unit IDs a mapping covers: listed units of a split section, else every unit of its sections."""
     listed = set(mapping.unit_ids)
     out: list[str] = []
     for section_id in mapping.source_section_ids:
@@ -79,7 +80,7 @@ def validate_section_plan(plan: SectionPlan, source: SourceDocument, template: T
     placed: dict[str, list[str]] = {}
     unresolved_units: list[str] = []
     for m in plan.mappings:
-        units = _covered_units(m, source_units)
+        units = covered_units(m, source_units)
         if m.mapping_type == MappingType.UNRESOLVED or (m.target_section_id is None and m.mapping_type != MappingType.OMIT):
             unresolved_units += units
             continue

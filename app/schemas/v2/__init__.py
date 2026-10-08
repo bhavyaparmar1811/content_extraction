@@ -32,6 +32,7 @@ from .plans import (
     MigrationAction,
     OrderingRule,
     PlanOrigin,
+    RegionChoice,
     SectionMapping,
     SectionPlan,
     SectionSlotPlan,

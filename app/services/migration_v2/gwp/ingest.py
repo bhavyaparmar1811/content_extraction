@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Optional
 
 from app.config.settings import Settings
 from app.schemas.v2 import SourceDocument, SourceSection, SourceUnit
@@ -24,6 +25,14 @@ from app.services.parser.parser_factory import ParserFactory
 _NO_RULE_HEADING_RE = re.compile(
     r"^(?:table\s+of\s+contents?|contents|general\s+information|references?|associated\s+documents?"
     r"|document\s+history|revision\s+history|document\s+approvals?)$",
+    re.I,
+)
+# The guide's own administrative chapters (its purpose, scope, roles...): they describe the guide, not the
+# documents it governs. Only top-level numbered chapters; "7.1 Articulate the purpose" is guidance and stays.
+_OWN_CHAPTER_RE = re.compile(
+    r"^(?:purpose|objectives?|scope|applicability|definitions?(?:\s*(?:&|and)\s*abbreviations?)?|abbreviations?"
+    r"|implementation(?:\s+and\s*/?\s*or\s+pre-?\s*requisites?)?|pre-?\s*requisites?"
+    r"|roles?(?:\s*(?:&|and)\s*responsibilities)?|responsibilities)$",
     re.I,
 )
 
@@ -54,10 +63,13 @@ def _heading_text(section: SourceSection) -> str:
 
 
 def is_rule_bearing(section: SourceSection) -> bool:
-    """False for the cover page, table of contents, references and history."""
+    """False for the cover page, table of contents, references, history and the guide's own front chapters."""
     if section.number == "0":
         return False
-    return not _NO_RULE_HEADING_RE.match(_heading_text(section))
+    heading = _heading_text(section)
+    if section.level == 1 and section.number and _OWN_CHAPTER_RE.match(heading):
+        return False
+    return not _NO_RULE_HEADING_RE.match(heading)
 
 
 def rule_input_sections(doc: SourceDocument) -> list[tuple[SourceSection, list[SourceUnit]]]:
@@ -72,10 +84,11 @@ def rule_input_sections(doc: SourceDocument) -> list[tuple[SourceSection, list[S
     return selected
 
 
-def render_section(section: SourceSection, units: list[SourceUnit]) -> str:
-    """The prompt form of one section: heading line, then one line per unit."""
+def render_section(section: SourceSection, units: list[SourceUnit], marked: Optional[set[str]] = None) -> str:
+    """The prompt form of one section: heading line, then one line per unit; ``marked`` units get a '>>' prefix."""
     heading = " ".join(part for part in (section.number, _heading_text(section)) if part)
     lines = [f"## {heading}"]
     for unit in units:
-        lines.append(f"[{unit.unit_id}] ({unit.unit_type.value}) {unit.text}")
+        prefix = ">> " if marked and unit.unit_id in marked else ""
+        lines.append(f"{prefix}[{unit.unit_id}] ({unit.unit_type.value}) {unit.text}")
     return "\n".join(lines)

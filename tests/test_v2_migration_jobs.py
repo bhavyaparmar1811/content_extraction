@@ -34,7 +34,7 @@ from app.stores.sop_store import SopStore
 from app.stores.template_store import TemplateStore
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "docs" / "migration_v2" / "examples"
-STUB_STAGES = {"PLANNING_SLOTS", "DRAFTING", "VALIDATING", "ASSEMBLING", "RECONCILING", "QUALITY_REVIEW"}
+STUB_STAGES = {"DRAFTING", "VALIDATING", "ASSEMBLING", "RECONCILING", "QUALITY_REVIEW"}
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────

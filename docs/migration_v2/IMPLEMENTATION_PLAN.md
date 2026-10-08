@@ -61,7 +61,7 @@ Each new phase adds its output and checks to the report.
 | 5 | Migration job persistence, orchestrator skeleton, API | 1 | M |
 | 6 | Protected-fact registry and deterministic preservation checks | 2 | M |
 | 7 | Section planner and section-plan validation | 2, 3, 5 | M |
-| 8 | Slot planner and slot-plan validation | 7 | M |
+| 8 | Slot planner and slot-plan validation (done 2026-10-08) | 7 | M |
 | 9 ★ | GWP drafter (claim-level evidence, bounded memory, batching) | 4, 6, 8 | L |
 | 10 | Validation, semantic critic, targeted repair, quality gates | 6, 9 | M |
 | 11 ★ | Anchor-based Word renderer v2 | 3, 9 | L |

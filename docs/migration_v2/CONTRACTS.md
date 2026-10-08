@@ -91,6 +91,14 @@ MigrationJob tracks status, per-section state and every versioned ArtifactRef.
   - references: upper-cased (`BI-VQD-10095-S`).
   The registry decides what must be kept, and a reviewer may delete a false fact. A claim may repeat anything its cited units say. Obligations are per sentence; `FUTURE` ("will") is not stored.
 - **Section plans.** `SectionMapping.origin` records who decided a mapping: `rule` (the deterministic name and content matcher), `llm` (a correction) or `human` (a reviewer edit). `SectionPlan.origin` is `rule` when no LLM ran. `prompt_version`, `model` and `token_usage` record the LLM pass. In a `split` mapping, a listed section with none of its units in `unit_ids` counts as whole. A source chapter whose subsections go to different targets gives split mappings on both sides. `TargetSection.aliases` holds other source headings for a target (from `TemplateConfig.sections.<KEY>.aliases`). The plan's validation report is a `quality_report` artifact with scope `section_plan`.
+- **Slot plans.** One `SectionSlotPlan` per template section, with a `SlotMapping` for every slot.
+  - `SlotMapping.source_unit_ids` are in source order. One unit may feed several slots; each of those slots then has `extraction_scope: [<slot key>]` ("only the part about the geography").
+  - `migration_action` is `copy_verbatim` in placement mode (no GWP style rule for the slot's content type) and for table slots; otherwise `extract_and_rewrite`. Empty slots are `none`.
+  - `rule_ids` are the approved GWP rules (STY, PRES, FMT) the drafter applies to the slot, selected by content type from the job's `gwp_rules` artifact. Without a GWP they are the baseline `PRES-*` rules. `SlotPlan.gwp_guide_id` names the rule set (`BASELINE` without a guide).
+  - Empty slots: required → `source_content_not_found` (gap for the reviewer), optional → `not_applicable` (removed). A `one_of` group with one member filled marks the others `not_applicable`; with none filled, its first member is the gap.
+  - A fixed callout slot lists the units promoted to its kind in that section (`callout_assignments`).
+  - `unplaced_unit_ids` fit no slot and go to the reviewer, with the reason in `notes`. `RegionChoice` records a source lead-in that answers an inline-choice region ("This SOP is applicable:" → `p:32`, choice `SOP`).
+  - `origin` per slot mapping and `prompt_version`, `model`, `token_usage` on the plan, as for section plans. The validation report is a `quality_report` artifact with scope `slot_plan`.
 - **Language.** `SourceDocument.language` is the hook for translation later; claims are the unit of translation.
 
 ## Changing a contract

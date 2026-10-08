@@ -105,6 +105,11 @@ class SlotMapping(V2Model):
     status: MappingStatus = MappingStatus.MAPPED
     requires_human_review: bool = False
     note: Optional[str] = None
+    origin: MappingOrigin = MappingOrigin.RULE
+    rule_ids: list[str] = Field(
+        default_factory=list,
+        description="GWP rules the drafter applies to this slot, selected from the job's rule set by content type",
+    )
 
     @model_validator(mode="after")
     def _rules(self) -> "SlotMapping":
@@ -133,6 +138,18 @@ class CalloutAssignment(V2Model):
     reason: str = Field(min_length=1)
 
 
+class RegionChoice(V2Model):
+    """A source line that answers one of the template's conditional regions instead of filling a slot.
+
+    E.g. the source lead-in "This SOP is applicable:" answers the inline choice
+    "This Directive/SOP/Work Instruction/Guidance is applicable:" with "SOP".
+    """
+
+    region_id: str
+    unit_ids: list[str] = Field(min_length=1)
+    choice: Optional[str] = Field(default=None, description="The option the source uses, e.g. 'SOP'")
+
+
 class SectionSlotPlan(V2Model):
     target_section_id: str
     source_section_ids: list[str] = Field(default_factory=list)
@@ -141,6 +158,8 @@ class SectionSlotPlan(V2Model):
         default_factory=list, description="Units in scope that fit no slot; flagged for plan review"
     )
     callout_assignments: list[CalloutAssignment] = Field(default_factory=list)
+    region_choices: list[RegionChoice] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list, description="For the reviewer: unplaced units, LLM doubts")
 
     @model_validator(mode="after")
     def _unit_in_one_callout(self) -> "SectionSlotPlan":
@@ -165,3 +184,10 @@ class SlotPlan(V2Model):
     origin: PlanOrigin = PlanOrigin.LLM
     sections: list[SectionSlotPlan] = Field(default_factory=list)
     approved_by: Optional[str] = None
+    prompt_version: Optional[str] = None
+    model: Optional[str] = None
+    token_usage: dict[str, int] = Field(default_factory=dict, description="e.g. input_tokens, output_tokens, calls")
+    gwp_guide_id: Optional[str] = Field(default=None, description="Rule set the rule_ids come from; 'BASELINE' without a GWP")
+
+    def section(self, target_section_id: str) -> Optional[SectionSlotPlan]:
+        return next((s for s in self.sections if s.target_section_id == target_section_id), None)

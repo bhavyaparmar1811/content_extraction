@@ -1,9 +1,13 @@
 """Run the finished migration stages on one SOP, exactly as a job would, and collect what they produced.
 
 Uses throwaway stores in a work folder and the production stage functions
-(``stages.parsing``, ``stages.plan_sections``). The template readiness gate
-is not applied, so a template that is not ready yet can still be inspected;
-the report says that a real job would refuse it.
+(``stages.parsing``, ``stages.plan_sections``, ``stages.plan_slots``). The
+template readiness gate is not applied, so a template that is not ready yet can
+still be inspected; the report says that a real job would refuse it.
+
+A GWP rules file is optional. Its candidate rules (not yet approved by a
+reviewer) are treated as approved for the preview, so the report shows what a
+migration with that guide would use; the report says so.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from app.schemas.v2 import (
     SectionDraft,
     SectionPlan,
     SlotDraft,
+    SlotPlan,
     SourceDocument,
     TemplateModel,
     ValidationIssue,
@@ -42,16 +47,16 @@ from app.stores.template_store import TemplateStore
 
 from ..artifacts import ArtifactWriter
 from ..gwp.ingest import parse_document
-from ..gwp.service import load_rule_set, save_rule_set
+from ..gwp.service import approve_rules, load_rule_set, save_rule_set
 from ..inputs import InputResolver
 from ..quality.preservation import check_preservation
-from ..stages import StageContext, parsing, plan_sections
+from ..stages import StageContext, parsing, plan_sections, plan_slots
 from ..template.overrides import TemplateConfig, load_config
 from ..template.readiness import ReadinessReport
 from ..template.service import build_template_model, normalize_and_save
 from .checks import Check, evaluate
 from .completeness import Completeness, check_completeness
-from .golden import find_golden, golden_problems, missing_must_preserve
+from .golden import callout_comparison, find_golden, golden_problems, missing_must_preserve, slot_problems
 
 
 @dataclass
@@ -74,11 +79,16 @@ class Inspection:
     facts: ProtectedFacts
     plan: SectionPlan
     plan_report: QualityReport
+    slot_plan: SlotPlan
+    slot_report: QualityReport
     completeness: Completeness
     self_check: list[ValidationIssue]
     events: list[dict]
     golden: Optional[dict] = None
     golden_problems: list[str] = field(default_factory=list)
+    golden_slot_problems: list[str] = field(default_factory=list)
+    golden_callouts: list[tuple[str, str, str]] = field(default_factory=list)
+    gwp_candidates_previewed: int = 0
     missing_preserve: list[str] = field(default_factory=list)
     artifacts: dict[str, Path] = field(default_factory=dict)
     checks: list[Check] = field(default_factory=list)
@@ -124,6 +134,7 @@ async def inspect_sop(
     work = Path(out_dir) / "_work" / f"{short}-{datetime.now():%Y%m%d%H%M%S%f}"
     settings = _settings(work)
     settings.section_planner_llm = "confirm" if llm else "off"
+    settings.slot_planner_llm = "confirm" if llm else "off"
 
     source = parse_document(sop_path, settings, doc_id)
     units_file = work / "units.json"
@@ -139,8 +150,11 @@ async def inspect_sop(
 
     gwp_store = GwpStore(work / "gwp.db", settings)
     gwp_id = gwp_version = None
+    candidates = 0
     if gwp_rules_path:
         rules_in = load_rule_set(Path(gwp_rules_path))
+        candidates = sum(r.status.value == "candidate" for r in rules_in.rules)
+        rules_in, _ = approve_rules(rules_in)  # preview only: a real job needs a reviewer's approval
         guide = gwp_store.create_record(rules_in.guide_id, rules_in.guide_id, "json")
         rules_file = work / "gwp_rules.json"
         save_rule_set(rules_file, rules_in.model_copy(update={"version": guide["version"]}))
@@ -163,6 +177,8 @@ async def inspect_sop(
     await parsing(ctx)
     ctx.job = store.get_job(job.job_id)
     await plan_sections(ctx)
+    ctx.job = store.get_job(job.job_id)
+    await plan_slots(ctx)
     job = store.get_job(job.job_id)
 
     facts = writer.latest(job, ArtifactKind.PROTECTED_FACTS, ProtectedFacts)
@@ -175,15 +191,20 @@ async def inspect_sop(
         facts=facts,
         plan=writer.latest(job, ArtifactKind.SECTION_PLAN, SectionPlan),
         plan_report=writer.latest(job, ArtifactKind.QUALITY_REPORT, QualityReport, scope="section_plan"),
+        slot_plan=writer.latest(job, ArtifactKind.SLOT_PLAN, SlotPlan),
+        slot_report=writer.latest(job, ArtifactKind.QUALITY_REPORT, QualityReport, scope="slot_plan"),
         completeness=check_completeness(sop_path, source),
         self_check=_self_check(source, facts),
         events=store.list_events(job.job_id),
         llm=llm,
+        gwp_candidates_previewed=candidates,
     )
     insp.golden = find_golden(golden_dir, sop_path.name) if golden_dir else None
     if insp.golden:
         insp.golden_problems = golden_problems(insp.plan, insp.source, template.model, insp.golden)
         insp.missing_preserve = missing_must_preserve(insp.source, insp.golden)
+        insp.golden_slot_problems = slot_problems(insp.slot_plan, insp.source, template.model, insp.golden)
+        insp.golden_callouts = callout_comparison(insp.slot_plan, insp.source, insp.golden)
     insp.checks = evaluate(insp)
 
     dest = Path(out_dir) / doc_id
