@@ -19,6 +19,7 @@ from app.services.hierarchy.ast_builder import ASTBuilder
 from app.services.chunking.hierarchical import HierarchicalChunker
 from app.services.chunking.semantic import SemanticChunker
 from app.services.export.migration_exporter import MigrationExporter
+from app.services.export.source_unit_exporter import SourceUnitExporter
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.stores.sop_store import SopStore
@@ -190,6 +191,23 @@ class JobManager:
                     clean_json = json.dumps(migration_output.to_clean_dict(), indent=2, ensure_ascii=False)
                     await asyncio.to_thread(out_file.write_text, clean_json, encoding="utf-8")
 
+                    # v2 source units, versioned so a re-upload never overwrites them.
+                    units_file = None
+                    try:
+                        source_doc = SourceUnitExporter.export(
+                            document_id=document_id,
+                            ast=ast,
+                            source_file=upload_path.name,
+                            file_type=upload_path.suffix.lstrip(".").lower() or None,
+                        )
+                        version = getattr(raw_document.metadata, "gpdat_version", None) or 1
+                        units_file = output_dir / f"{document_id}_v{version}_units.json"
+                        units_json = json.dumps(source_doc.to_clean_dict(), indent=2, ensure_ascii=False)
+                        await asyncio.to_thread(units_file.write_text, units_json, encoding="utf-8")
+                    except Exception as units_err:  # v2 output must never fail the v3.1 job
+                        logger.warning(f"Source-unit export failed for {document_id}: {units_err}")
+                        units_file = None
+
                     if self.sop_store:
                         try:
                             meta = migration_output.metadata
@@ -207,6 +225,7 @@ class JobManager:
                                 page_count=getattr(meta, "page_count", 0) or 0,
                                 source_filename=upload_path.name if upload_path else None,
                                 output_path=str(out_file),
+                                units_path=str(units_file) if units_file else None,
                                 status="in_review",
                             )
                         except Exception as store_err:

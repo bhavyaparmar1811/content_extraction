@@ -36,3 +36,6 @@ Thumbs.db
 data/
 data/logs/
 frontend/package-lock.json
+
+# Confidential sample SOPs, templates, GWP guide and golden expectations
+documents/

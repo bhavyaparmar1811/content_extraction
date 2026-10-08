@@ -1,0 +1,36 @@
+{
+  "job_id": "MIG-0001",
+  "sop_record_id": 42,
+  "template_id": "TPL-MAIN-GP",
+  "template_version": 1,
+  "gwp_id": "GWP-CORP",
+  "gwp_version": 1,
+  "mode": "review",
+  "status": "SLOT_PLAN_REVIEW_PENDING",
+  "sections": [
+    {"target_section_id": "TGT-3", "status": "slot_planned", "attempts": 1}
+  ],
+  "artifacts": [
+    {
+      "kind": "section_plan",
+      "version": 1,
+      "path": "data/migrations/MIG-0001/section_plan_v1.json",
+      "sha256": "9b74c9897bac770ffc029102a200c5de"
+    },
+    {
+      "kind": "section_plan",
+      "version": 2,
+      "path": "data/migrations/MIG-0001/section_plan_v2.json",
+      "sha256": "6f1ed002ab5595859014ebf0951522d9",
+      "created_by": "reviewer@example.com"
+    },
+    {
+      "kind": "slot_plan",
+      "version": 1,
+      "path": "data/migrations/MIG-0001/slot_plan_v1.json",
+      "sha256": "1f3870be274f6c49b3e31a0c6728957f"
+    }
+  ],
+  "created_by": "author@example.com",
+  "created_at": "2026-10-02T09:15:00Z"
+}

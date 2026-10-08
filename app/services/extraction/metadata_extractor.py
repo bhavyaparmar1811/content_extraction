@@ -214,11 +214,17 @@ class SOPMetadataExtractor:
         values = {"title": "", "name": "", "number": "", "version": "", "type": ""}
         doc_title = doc_name = doc_number = doc_version = doc_type = ""
 
+        # Imported here: the parser package imports this module.
+        from app.services.parser.docx_parser import DocxParser
+        from app.services.parser.ooxml import element_text
+
         try:
             doc = docx.Document(file_path)
             for table in doc.tables[:3]:
                 for row in table.rows:
-                    cls._classify_row([c.text for c in row.cells], values)
+                    # Cover-sheet values often sit in inline content controls,
+                    # which python-docx's cell.text leaves out.
+                    cls._classify_row([element_text(tc) for tc in DocxParser._row_cells(row._tr)], values)
 
             doc_title, doc_name, doc_number, doc_version, doc_type = (
                 values["title"], values["name"], values["number"], values["version"], values["type"]

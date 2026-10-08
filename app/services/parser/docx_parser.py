@@ -27,6 +27,7 @@ from app.schemas.document import (
     RawDocument,
 )
 from .base_parser import BaseParser
+from .ooxml import NumberingInfo, NumberingResolver, element_text, iter_body_blocks
 
 
 class DocxParser(BaseParser):
@@ -42,6 +43,11 @@ class DocxParser(BaseParser):
         "Heading 5": 5,
         "Heading 6": 6,
     }
+
+    # Treat any paragraph with Word numbering (w:numPr) as a list item, not only
+    # the list styles below. The template parser turns this off: its numbered
+    # blue instructions are instructions, not content lists.
+    _NUMPR_LISTS: bool = True
 
     _LIST_STYLES: set[str] = {
         "List Bullet",
@@ -75,8 +81,11 @@ class DocxParser(BaseParser):
 
         extracted_image_hashes: set[str] = set()  # track inline-extracted images to avoid duplicates
         self._extracted_hash_paths: dict[str, Path] = {}
+        self._numbering = NumberingResolver(doc)
+        self._paragraph_index = 0
 
-        for block in doc.element.body:
+        # Block content controls are flattened; the TOC control is skipped.
+        for block in iter_body_blocks(doc.element.body):
             tag = block.tag
             if tag == qn('w:p'):
                 para = Paragraph(block, doc)
@@ -85,7 +94,17 @@ class DocxParser(BaseParser):
                 if self._paragraph_starts_new_page(para):
                     self._current_page += 1
 
-                element = self._classify_paragraph(para, sequence)
+                # Advance numbering for every paragraph, empty ones included,
+                # as Word does.
+                numbering = self._numbering.advance(block)
+                paragraph_index = self._paragraph_index
+                self._paragraph_index += 1
+                element = self._classify_paragraph(
+                    para, sequence,
+                    numbering=numbering,
+                    outline_level=self._numbering.outline_level(block),
+                    paragraph_index=paragraph_index,
+                )
                 if element is not None:
                     elements.append(element)
                     sequence += 1
@@ -93,6 +112,8 @@ class DocxParser(BaseParser):
                 # Extract inline images from this paragraph in document order
                 inline_images = self._extract_inline_images(block, doc, sequence, extracted_image_hashes)
                 for img_el in inline_images:
+                    # Same index as the paragraph's text, so an inline icon stays with its own text.
+                    img_el.metadata["paragraph_index"] = paragraph_index
                     elements.append(img_el)
                     sequence += 1
 
@@ -241,9 +262,17 @@ class DocxParser(BaseParser):
     # ── Paragraph classification ────────────────────────────────────
 
     def _classify_paragraph(
-        self, para, sequence: int
+        self, para, sequence: int,
+        numbering: Optional[NumberingInfo] = None,
+        outline_level: Optional[int] = None,
+        paragraph_index: Optional[int] = None,
     ) -> Optional[ExtractedElement]:
-        """Classify a python-docx paragraph into a typed ExtractedElement."""
+        """Classify a python-docx paragraph into a typed ExtractedElement.
+
+        *numbering* and *outline_level* come from ``NumberingResolver``; when
+        given, a heading gets its Word number ("6.1.2") and a numbered paragraph
+        becomes a list item with its level.
+        """
         text = para.text.strip()
         if not text:
             return None
@@ -265,19 +294,26 @@ class DocxParser(BaseParser):
 
         current_page = getattr(self, '_current_page', 1)
 
+        heading_level = self._HEADING_STYLES.get(style_name)
+        if heading_level is None and outline_level is not None and style_name not in self._LIST_STYLES:
+            heading_level = outline_level + 1
+
         element: ExtractedElement
-        if style_name in self._HEADING_STYLES:
+        if heading_level is not None:
             element = ExtractedHeading(
                 content=text,
                 page=current_page,
                 sequence=sequence,
-                level=self._HEADING_STYLES[style_name],
+                level=heading_level,
                 style_name=style_name,
             )
-        elif style_name in self._LIST_STYLES:
+            if numbering is not None and numbering.number:
+                element.metadata["numbering"] = numbering.number
+                element.metadata["numbering_source"] = "numPr"
+        elif style_name in self._LIST_STYLES or (self._NUMPR_LISTS and numbering is not None):
             # Distinguish numbered lists from bullet lists
             element_type = ElementType.LIST_ITEM
-            if "Number" in style_name:
+            if "Number" in style_name or (numbering is not None and numbering.number):
                 element_type = ElementType.NUMBERED_STEP
             element = ExtractedElement(
                 element_type=element_type,
@@ -285,6 +321,11 @@ class DocxParser(BaseParser):
                 page=current_page,
                 sequence=sequence,
             )
+            if numbering is not None:
+                element.metadata["list_level"] = numbering.ilvl
+                element.metadata["num_id"] = numbering.num_id
+                if numbering.number:
+                    element.metadata["list_number"] = numbering.number
         else:
             element = ExtractedElement(
                 element_type=ElementType.PARAGRAPH,
@@ -295,6 +336,10 @@ class DocxParser(BaseParser):
 
         from docx.oxml.ns import qn
         element.shading_hex = self._shading_fill(para._element.find(qn('w:pPr')))
+        if outline_level is not None:
+            element.outline_level = outline_level
+        if paragraph_index is not None:
+            element.metadata["paragraph_index"] = paragraph_index
         return element
 
     # ── Table extraction ────────────────────────────────────────────
@@ -315,13 +360,18 @@ class DocxParser(BaseParser):
         # wrappers would therefore duplicate content, so the merge structure is
         # taken from the row's own ``tc_lst`` and walked in lockstep.
         last_origin_row_at_col: dict[int, int] = {}
+        from docx.table import _Cell
+
+        grid_el = table._tbl.find(qn('w:tblGrid'))
+        grid_width = len(grid_el.findall(qn('w:gridCol'))) if grid_el is not None else 0
 
         for row_idx, row in enumerate(table.rows):
             cell_row: list[ExtractedTableCell] = []
-            grid_cells = row.cells
             grid_pos = 0
 
-            for tc in row._tr.tc_lst:
+            # Cells can sit inside a row-level content control (w:sdt), e.g. cover-sheet
+            # fields; python-docx's row.cells and tc_lst skip those.
+            for tc in self._row_cells(row._tr):
                 tcPr = tc.find(qn('w:tcPr'))
 
                 col_span = 1
@@ -337,9 +387,9 @@ class DocxParser(BaseParser):
                 )
 
                 for span_idx in range(col_span):
-                    if grid_pos >= len(grid_cells):
+                    if grid_width and grid_pos >= grid_width:
                         break
-                    cell = grid_cells[grid_pos]
+                    cell = _Cell(tc, table)
 
                     if is_vertical_continuation:
                         # Extend the origin's row_span once per covered row.
@@ -388,9 +438,15 @@ class DocxParser(BaseParser):
                     if left_border:
                         cell_metadata["border_left_color_hex"] = left_border
 
+                    resolver = getattr(self, "_numbering", None)
+                    if resolver is not None:
+                        for cell_p in tc.iter(qn('w:p')):
+                            resolver.advance(cell_p)
+
                     cell_row.append(
                         ExtractedTableCell(
-                            content_text=cell.text.strip(),
+                            # Includes text inside inline content controls, which cell.text drops.
+                            content_text=element_text(tc).strip(),
                             col_span=col_span,
                             row_span=1,  # extended as vMerge continuations are seen
                             is_merge_origin=True,
@@ -429,6 +485,21 @@ class DocxParser(BaseParser):
             col_widths_pt=self._table_col_widths_pt(table),
             header_rows=self._table_header_row_count(table),
         )
+
+    @staticmethod
+    def _row_cells(tr) -> list:
+        """The row's ``w:tc`` elements in order, including cells inside row-level ``w:sdt``."""
+        from docx.oxml.ns import qn
+
+        cells = []
+        for child in tr:
+            if child.tag == qn('w:tc'):
+                cells.append(child)
+            elif child.tag == qn('w:sdt'):
+                content = child.find(qn('w:sdtContent'))
+                if content is not None:
+                    cells.extend(DocxParser._row_cells(content))
+        return cells
 
     @staticmethod
     def _cell_left_border_color(tcPr) -> Optional[str]:
@@ -516,6 +587,21 @@ class DocxParser(BaseParser):
 
         # Collect all rId references from inline drawings/pictures
         rids: list[str] = []
+        # Displayed size per rId, from the drawing's wp:extent (EMU; 9525 EMU = 1 px at 96 dpi).
+        sizes_px: dict[str, tuple[int, int]] = {}
+        wp_extent = '{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}extent'
+        for drawing in paragraph_element.iter(qn('w:drawing')):
+            extent = next(drawing.iter(wp_extent), None)
+            if extent is None:
+                continue
+            try:
+                size = (int(extent.get('cx')) // 9525, int(extent.get('cy')) // 9525)
+            except (TypeError, ValueError):
+                continue
+            for blip in drawing.iter('{http://schemas.openxmlformats.org/drawingml/2006/main}blip'):
+                embed = blip.get(f'{{{r_ns}}}embed')
+                if embed:
+                    sizes_px.setdefault(embed, size)
 
         # <w:drawing> -> <wp:inline> or <wp:anchor> -> <a:graphic> -> <a:graphicData> -> <pic:pic> -> <pic:blipFill> -> <a:blip r:embed="rId...">
         for blip in paragraph_element.iter('{http://schemas.openxmlformats.org/drawingml/2006/main}blip'):
@@ -558,6 +644,8 @@ class DocxParser(BaseParser):
                             sequence=sequence,
                             image_path=str(save_path),
                             content_hash=img_hash,
+                            width=sizes_px.get(rid, (0, 0))[0],
+                            height=sizes_px.get(rid, (0, 0))[1],
                         )
                     )
                     sequence += 1
@@ -585,6 +673,8 @@ class DocxParser(BaseParser):
                         sequence=sequence,
                         image_path=str(save_path),
                         content_hash=img_hash,
+                        width=sizes_px.get(rid, (0, 0))[0],
+                        height=sizes_px.get(rid, (0, 0))[1],
                     )
                 )
                 sequence += 1

@@ -13,11 +13,12 @@ from app.config.settings import get_settings
 from app.core.exception_handlers import register_exception_handlers
 from app.core.logging_config import setup_logging
 from app.core.logging_middleware import LoggingContextMiddleware
-from app.api import health, upload, extract, documents, jobs, migration, sops, review, auth, templates
+from app.api import health, upload, extract, documents, jobs, migration, sops, review, auth, templates, gwp, migrations_v2
 from app.services.job_manager import JobManager
 from app.stores.sop_store import SopStore
 from app.stores.auth_store import AuthStore
 from app.stores.template_store import TemplateStore
+from app.stores.gwp_store import GwpStore
 
 
 @asynccontextmanager
@@ -40,6 +41,8 @@ async def lifespan(application: FastAPI):
     template_store = TemplateStore(template_db_path, settings)
     application.state.template_store = template_store
 
+    application.state.gwp_store = GwpStore(settings.project_root / "data" / "gwp_guides.db", settings)
+
     auth_db_path = settings.auth_db_path or (settings.project_root / "data" / "auth.db")
     auth_store = AuthStore(auth_db_path, settings)
     application.state.auth_store = auth_store
@@ -52,9 +55,30 @@ async def lifespan(application: FastAPI):
     chain_factory = ChainFactory(settings)
     application.state.chain_factory = chain_factory
 
+    # Migration v2: persisted jobs, resumed after a restart.
+    from app.services.llm.rate_limiter import LLMRateLimiter
+    from app.services.migration_v2.artifacts import ArtifactWriter
+    from app.services.migration_v2.inputs import InputResolver
+    from app.services.migration_v2.orchestrator import Orchestrator
+    from app.stores.migration_store import MigrationStore
+
+    migration_store = MigrationStore(settings.project_root / "data" / "migrations.db", settings)
+    orchestrator = Orchestrator(
+        store=migration_store,
+        artifacts=ArtifactWriter(settings.migration_v2_dir, migration_store),
+        inputs=InputResolver(sop_store, template_store, application.state.gwp_store),
+        settings=settings,
+        rate_limiter=LLMRateLimiter(),
+        chain_factory=chain_factory,
+    )
+    application.state.migration_store = migration_store
+    application.state.migration_orchestrator = orchestrator
+    await orchestrator.start()
+
     yield
 
     logger.info("SOP Migration System shutting down.")
+    await application.state.migration_orchestrator.stop()
     await job_manager.stop()
     from app.core.logging_config import reset_logging_state
     reset_logging_state()
@@ -92,3 +116,5 @@ app.include_router(sops.router)
 app.include_router(review.router)
 app.include_router(auth.router)
 app.include_router(templates.router)
+app.include_router(gwp.router)
+app.include_router(migrations_v2.router)

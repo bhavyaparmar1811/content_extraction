@@ -1,0 +1,81 @@
+{
+  "target_section_id": "TGT-3",
+  "version": 1,
+  "origin": "llm",
+  "prompt_version": "drafter-2026-10-01",
+  "model": "google_genai:gemini-2.5-flash",
+  "slots": [
+    {
+      "slot_id": "TGT-3-STEPS",
+      "rendering": "ordered_list",
+      "claims": [
+        {
+          "claim_id": "C-TGT-3-001",
+          "text": "Create the deviation record.",
+          "source_unit_ids": [
+            "SRC-4.2-U001"
+          ],
+          "rule_ids_applied": [
+            "STY-002"
+          ]
+        },
+        {
+          "claim_id": "C-TGT-3-002",
+          "text": "Submit the deviation within five business days.",
+          "source_unit_ids": [
+            "SRC-4.2-U002"
+          ],
+          "rule_ids_applied": [
+            "STY-002",
+            "PRES-004"
+          ]
+        },
+        {
+          "claim_id": "C-TGT-3-003",
+          "text": "Do not close the deviation until Quality Assurance (QA) approves it (see {{ref:SRC-5.1}}).",
+          "source_unit_ids": [
+            "SRC-4.2-U003"
+          ],
+          "spans": [
+            {
+              "unit_id": "SRC-4.2-U003",
+              "start": 9,
+              "end": 95
+            }
+          ],
+          "rule_ids_applied": [
+            "PRES-004"
+          ],
+          "callout_kind": "attention"
+        }
+      ]
+    },
+    {
+      "slot_id": "TGT-3-TIMING",
+      "rendering": "bullets",
+      "claims": [
+        {
+          "claim_id": "C-TGT-3-004",
+          "text": "Submit the deviation within five business days.",
+          "source_unit_ids": [
+            "SRC-4.2-U002"
+          ],
+          "derived_from_claim_ids": [
+            "C-TGT-3-002"
+          ]
+        }
+      ]
+    },
+    {
+      "slot_id": "TGT-3-INPUTS",
+      "claims": [
+        {
+          "claim_id": "C-TGT-3-GAP-001",
+          "text": "Source content not found. Human review required.",
+          "is_gap_marker": true
+        }
+      ]
+    }
+  ],
+  "unresolved_items": []
+}

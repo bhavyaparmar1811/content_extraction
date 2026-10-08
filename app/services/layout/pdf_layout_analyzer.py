@@ -48,6 +48,11 @@ class PDFLayoutAnalyzer:
     # Default percentage of page height considered header/footer zone
     _DEFAULT_HEADER_FOOTER_PCT = 0.08  # 8% of page height
 
+    # Text this close to the page edge is a running header/footer on position
+    # alone. Further in (up to 14% top / 12% bottom) it must match a pattern or
+    # repeat across pages, so body text near the margin is kept.
+    _EDGE_BAND_PCT = 0.06
+
     # Left-rail SOP icons are small images. Including them in XY-cut makes the
     # icon strip look like its own column, so headings and left fragments are
     # read before the right-hand paragraphs they belong with.
@@ -57,11 +62,14 @@ class PDFLayoutAnalyzer:
         self.settings = settings
         self.logger = logger or _default_logger
         self._reading_order = ReadingOrderAnalyzer(logger=self.logger)
+        # Texts that repeat in the header/footer zone across pages (set per document).
+        self._running_texts: set[str] = set()
 
     # ── Public API ────────────────────────────────────────────────────
 
     def analyze_document(self, document: RawDocument) -> list[PageLayout]:
         """Run layout analysis on every page and return page layouts."""
+        self._running_texts = self._find_running_texts(document)
         layouts: list[PageLayout] = []
         for idx, page in enumerate(document.pages):
             layout = self.analyze_page(page, is_first_page=(idx == 0))
@@ -226,6 +234,35 @@ class PDFLayoutAnalyzer:
 
     # ── Header / Footer Detection ─────────────────────────────────────
 
+    @staticmethod
+    def _norm_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text or "").strip().lower()
+
+    def _find_running_texts(self, document: RawDocument) -> set[str]:
+        """Texts in the top or bottom zone that recur on at least half the pages.
+
+        Catches running-header values the patterns miss, such as the document
+        title printed beside a separate "Title:" label.
+        """
+        pages = document.pages
+        if len(pages) < 2:
+            return set()
+        page_counts: dict[str, int] = {}
+        for page in pages:
+            height = page.height or 792.0
+            seen: set[str] = set()
+            for el in page.elements:
+                if el.bbox is None or el.element_type in ("table", "image"):
+                    continue
+                if el.bbox.y1 <= height * 0.14 or el.bbox.y0 >= height * 0.88:
+                    text = self._norm_text(getattr(el, "content", ""))
+                    if text:
+                        seen.add(text)
+            for text in seen:
+                page_counts[text] = page_counts.get(text, 0) + 1
+        threshold = max(2, len(pages) // 2)
+        return {text for text, count in page_counts.items() if count >= threshold}
+
     def _is_running_header(
         self,
         el: ExtractedElement,
@@ -245,7 +282,7 @@ class PDFLayoutAnalyzer:
         if el.element_type == "image":
             return True
 
-        text = (getattr(el, "text", "") or "").strip()
+        text = (getattr(el, "content", "") or "").strip()
         if not text:
             return True
 
@@ -260,6 +297,10 @@ class PDFLayoutAnalyzer:
             r"^Effective\s+Date:\s*",
             r"^Previous\s+Document\s+Number",
         ]
+        if el.bbox.y1 <= page_height * self._EDGE_BAND_PCT:
+            return True
+        if self._norm_text(text) in self._running_texts:
+            return True
         for pattern in header_patterns:
             if re.search(pattern, text, re.IGNORECASE):
                 return True
@@ -283,7 +324,7 @@ class PDFLayoutAnalyzer:
         if el.element_type == "image":
             return True
 
-        text = (getattr(el, "text", "") or "").strip()
+        text = (getattr(el, "content", "") or "").strip()
         if not text:
             return True
 
@@ -297,6 +338,10 @@ class PDFLayoutAnalyzer:
             r"^Page\s+\d+\s+of\s+\d+",
             r"GMT[+-]\d+:\d+",
         ]
+        if el.bbox.y0 >= page_height * (1 - self._EDGE_BAND_PCT):
+            return True
+        if self._norm_text(text) in self._running_texts:
+            return True
         for pattern in footer_patterns:
             if re.search(pattern, text, re.IGNORECASE):
                 return True

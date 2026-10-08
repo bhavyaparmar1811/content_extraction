@@ -1,0 +1,7 @@
+{
+  "entries": [
+    {"source_id": "SRC-4.2", "target_section_id": "TGT-3", "target_number": "3", "bookmark": "_Ref_TGT_3"},
+    {"source_id": "SRC-5.1", "target_section_id": "TGT-4", "target_number": "4.1", "bookmark": "_Ref_TGT_4_1"},
+    {"source_id": "SRC-4.2-U002", "target_section_id": "TGT-3", "target_number": "step 2", "bookmark": "_Ref_C_TGT_3_002"}
+  ]
+}

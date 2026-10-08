@@ -1,0 +1,74 @@
+{
+  "guide_id": "GWP-CORP",
+  "version": 1,
+  "source_file": "Good_Writing_Practice.docx",
+  "rules": [
+    {
+      "rule_id": "STR-001",
+      "category": "STR",
+      "text": "Separate responsibilities from procedure steps.",
+      "applies_to_content_types": [
+        "responsibility",
+        "ordered_procedure"
+      ],
+      "severity": "medium",
+      "check": "semantic",
+      "source_unit_ids": [
+        "GWP-2-U004"
+      ],
+      "status": "approved"
+    },
+    {
+      "rule_id": "STY-002",
+      "category": "STY",
+      "text": "Use present tense for executable instructions.",
+      "applies_to_content_types": [
+        "ordered_procedure"
+      ],
+      "severity": "low",
+      "check": "semantic",
+      "status": "approved",
+      "origin": "manual"
+    },
+    {
+      "rule_id": "STY-008",
+      "category": "STY",
+      "text": "Do not use \"please\".",
+      "severity": "high",
+      "check": "deterministic",
+      "params": {
+        "kind": "forbidden_terms",
+        "terms": [
+          "please"
+        ]
+      },
+      "source_unit_ids": [
+        "GWP-6.1-U011"
+      ],
+      "status": "candidate"
+    },
+    {
+      "rule_id": "PRES-004",
+      "category": "PRES",
+      "text": "Preserve obligation strength such as must, shall, may and should.",
+      "severity": "critical",
+      "check": "deterministic",
+      "params": {
+        "kind": "modality"
+      },
+      "status": "approved",
+      "origin": "baseline"
+    },
+    {
+      "rule_id": "FMT-001",
+      "category": "FMT",
+      "text": "Use numbered lists for executable procedures.",
+      "applies_to_content_types": [
+        "ordered_procedure"
+      ],
+      "severity": "medium",
+      "check": "semantic",
+      "status": "candidate"
+    }
+  ]
+}

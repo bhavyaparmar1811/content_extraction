@@ -28,6 +28,9 @@ from .docx_parser import DocxParser
 class TemplateDocxParser(DocxParser):
     """Parse template .docx files into a structured RawDocument with instruction annotations."""
 
+    # Numbered blue instructions are instructions, not content lists.
+    _NUMPR_LISTS = False
+
     # 23 known blue hex codes used across templates and SOPs
     BLUE_HEX_VALUES = {
         "0000FF", "0070C0", "4472C4", "2E74B5", "5B9BD5", "00B0F0",
@@ -235,8 +238,13 @@ class TemplateDocxParser(DocxParser):
 
     def _check_hex_or_rgb(self, hex_str: str) -> bool:
         """Validate if hex or RGB string represents a blue tone."""
-        clean = hex_str.upper().lstrip("#")
-        if clean in self.BLUE_HEX_VALUES:
+        return self.is_blue_hex(hex_str)
+
+    @classmethod
+    def is_blue_hex(cls, hex_str: str) -> bool:
+        """True when *hex_str* (``RRGGBB``, optional ``#``) is an instruction blue."""
+        clean = (hex_str or "").upper().lstrip("#")
+        if clean in cls.BLUE_HEX_VALUES:
             return True
         if len(clean) == 6:
             try:

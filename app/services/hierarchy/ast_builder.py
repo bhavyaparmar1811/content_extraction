@@ -229,11 +229,12 @@ class ASTBuilder:
         self, el: ExtractedHeading, seq: int,
     ) -> HeadingNode:
         """Convert an ``ExtractedHeading`` to a ``HeadingNode``."""
-        # Extract numbering prefix if present
-        numbering = None
-        match = re.match(r"^(\d+(?:\.\d+)*\.?)\s", el.content.strip())
-        if match:
-            numbering = match.group(1).rstrip(".")
+        # Word auto-numbering (computed by the DOCX parser) wins over a number typed in the text.
+        numbering = (getattr(el, "metadata", None) or {}).get("numbering")
+        if numbering is None:
+            match = re.match(r"^(\d+(?:\.\d+)*\.?)\s", el.content.strip())
+            if match:
+                numbering = match.group(1).rstrip(".")
 
         return HeadingNode(
             node_id=str(uuid.uuid4()),
@@ -380,6 +381,7 @@ class ASTBuilder:
             source_location=self._make_source_loc(el),
             confidence=el.confidence,
             content_hash=getattr(el, "content_hash", None) or self._hash_from_asset_name(el.image_path),
+            metadata=dict(getattr(el, "metadata", None) or {}),
         )
 
     @staticmethod
@@ -469,9 +471,15 @@ class ASTBuilder:
         i = start_index
         seq = start_seq
 
-        # Determine list type from first item
-        first_text = elements[i].content.strip()
-        list_type = self._detect_list_type(first_text)
+        # Determine list type from the first item: Word numbering when the
+        # parser resolved it, otherwise the text prefix.
+        first = elements[i]
+        first_meta = getattr(first, "metadata", None) or {}
+        if "list_level" in first_meta:
+            list_type = "ordered" if first_meta.get("list_number") else "unordered"
+        else:
+            list_type = self._detect_list_type(first.content.strip())
+        max_level = 0
 
         item_index = 1
         while i < len(elements):
@@ -492,6 +500,7 @@ class ASTBuilder:
                     metadata=dict(getattr(el, "metadata", {}) or {}),
                 )
                 items.append(item)
+                max_level = max(max_level, int(item.metadata.get("list_level") or 0))
                 item_index += 1
                 seq += 1
                 i += 1
@@ -511,7 +520,8 @@ class ASTBuilder:
         list_node = ListNode(
             node_id=str(uuid.uuid4()),
             list_type=list_type,
-            nesting_depth=0,
+            # Items stay flat (each keeps metadata["list_level"]); depth is the deepest level.
+            nesting_depth=max_level,
             items=items,
             sequence=start_seq,
         )
@@ -577,11 +587,14 @@ class ASTBuilder:
         before its paragraph still binds to that paragraph, not to a heading
         that happens to share the page.
         """
-        icons = [el for el in elements if el.element_type == ElementType.ICON]
+        # Only icons with a layout position (PDF) can be re-anchored. DOCX icons have
+        # no bbox and are already in reading order, so they stay where they are.
+        icons = [el for el in elements if el.element_type == ElementType.ICON and el.bbox is not None]
         if not icons:
             return list(elements)
 
-        rest = [el for el in elements if el.element_type != ElementType.ICON]
+        icon_ids = {id(ic) for ic in icons}
+        rest = [el for el in elements if id(el) not in icon_ids]
         text_types = (
             ElementType.PARAGRAPH,
             ElementType.LIST_ITEM,
@@ -644,4 +657,5 @@ class ASTBuilder:
         return SourceLocation(
             page=el.page,
             bbox=el.bbox,
+            paragraph_index=(getattr(el, "metadata", None) or {}).get("paragraph_index"),
         )

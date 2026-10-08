@@ -17,6 +17,14 @@ from app.schemas.template import (
 )
 from app.services.extraction.metadata_extractor import SOPMetadataExtractor
 from app.services.extraction.template_extractor import TemplateExtractionService
+from app.services.migration_v2.template.overrides import TemplateConfig, config_path, load_config, save_config
+from app.services.migration_v2.template.service import (
+    build_template_model,
+    normalize_and_save,
+    output_paths,
+    rebuild_from_normalized,
+    save_build,
+)
 from app.services.migration.template_slimmer import (
     save_slim_template_profile,
     get_slim_profile_path,
@@ -377,3 +385,133 @@ async def delete_template(
         "template_id": template_id,
         "message": f"Template '{template_id}' successfully deleted.",
     }
+
+
+# ── Migration v2: template model, normalization and readiness (Phase 3) ──
+
+def _template_source(record: dict[str, Any]) -> Path:
+    upload_path = record.get("upload_path")
+    if not upload_path or not Path(upload_path).exists():
+        raise NotFoundError(f"Uploaded template file missing at {upload_path}", code="TEMPLATE_FILE_NOT_FOUND")
+    return Path(upload_path)
+
+
+def _v1_output(record: dict[str, Any]) -> Optional[dict]:
+    """The v2.0 extraction output, used to link slot instructions to their IDs."""
+    output_path = record.get("output_path")
+    if output_path and Path(output_path).exists():
+        with open(output_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def _read_json(path: Optional[str]) -> Optional[dict]:
+    if path and Path(path).exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+@router.post("/{template_id}/normalize")
+async def normalize_template(
+    template_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Detect slots, write the normalized template (tagged content controls) and its readiness report."""
+    template_store = _get_template_store(request, settings)
+    record = _resolve_template_record(template_store, template_id)
+    source = _template_source(record)
+    uid, version = record["template_uid"], record["template_version"]
+    config = load_config(config_path(settings.template_config_dir, uid))
+    try:
+        out = normalize_and_save(source, uid, version, settings.template_output_dir, config, _v1_output(record))
+    except Exception as e:
+        logger.error(f"Template normalization failed for {template_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Template normalization failed: {str(e)}")
+    template_store.update_template_model(
+        record["id"], str(out.model_path), str(out.normalized_path), out.build.report.status.value
+    )
+    return {
+        "template_id": uid,
+        "template_version": version,
+        "readiness_status": out.build.report.status.value,
+        "wrapped_slots": len(out.normalization.wrapped),
+        "skipped_slots": [{"slot_id": s, "reason": r} for s, r in out.normalization.skipped],
+        "readiness": out.build.report.to_clean_dict(),
+    }
+
+
+@router.get("/{template_id}/slots")
+async def get_template_slots(
+    template_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """The TemplateModel. Before normalization it is detected on the fly and not saved."""
+    template_store = _get_template_store(request, settings)
+    record = _resolve_template_record(template_store, template_id)
+    saved = _read_json(record.get("model_path"))
+    if saved is not None:
+        return saved
+    config = load_config(config_path(settings.template_config_dir, record["template_uid"]))
+    build = build_template_model(
+        _template_source(record), record["template_uid"], record["template_version"], config, _v1_output(record)
+    )
+    return build.model.to_clean_dict()
+
+
+@router.get("/{template_id}/readiness")
+async def get_template_readiness(
+    template_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Readiness report. A migration may only use a template whose status is 'ready'."""
+    template_store = _get_template_store(request, settings)
+    record = _resolve_template_record(template_store, template_id)
+    if record.get("model_path"):
+        _, _, report_path = output_paths(settings.template_output_dir, record["template_uid"], record["template_version"])
+        saved = _read_json(str(Path(record["model_path"]).with_name(report_path.name)))
+        if saved is not None:
+            return saved
+    config = load_config(config_path(settings.template_config_dir, record["template_uid"]))
+    build = build_template_model(_template_source(record), record["template_uid"], record["template_version"], config)
+    return build.report.to_clean_dict()
+
+
+@router.get("/{template_id}/slot-config")
+async def get_template_slot_config(
+    template_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    template_store = _get_template_store(request, settings)
+    record = _resolve_template_record(template_store, template_id)
+    return load_config(config_path(settings.template_config_dir, record["template_uid"])).model_dump(mode="json")
+
+
+@router.put("/{template_id}/slot-config")
+async def put_template_slot_config(
+    template_id: str,
+    config: TemplateConfig,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Save human overrides (region decisions, slot types, required flags) and re-assess readiness."""
+    template_store = _get_template_store(request, settings)
+    record = _resolve_template_record(template_store, template_id)
+    uid, version = record["template_uid"], record["template_version"]
+    save_config(config_path(settings.template_config_dir, uid), config)
+
+    source = _template_source(record)
+    normalized = record.get("normalized_path")
+    if normalized and Path(normalized).exists() and record.get("model_path"):
+        build = rebuild_from_normalized(source, normalized, uid, version, config, _v1_output(record))
+        _, _, report_name = output_paths(settings.template_output_dir, uid, version)
+        model_path = Path(record["model_path"])
+        save_build(build, model_path, model_path.with_name(report_name.name))
+        template_store.update_template_model(record["id"], str(model_path), normalized, build.report.status.value)
+    else:
+        build = build_template_model(source, uid, version, config)
+    return build.report.to_clean_dict()

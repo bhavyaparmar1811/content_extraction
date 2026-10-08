@@ -1,0 +1,80 @@
+{
+  "schema_version": "v2.0",
+  "document_id": "SOP-QA-001",
+  "document_version": "3.0",
+  "source_file": "SOP-QA-001_Deviation_Management.docx",
+  "file_type": "docx",
+  "language": "en",
+  "sections": [
+    {
+      "section_id": "SRC-4.2",
+      "number": "4.2",
+      "heading": "Deviation Processing",
+      "level": 2,
+      "section_order": 42,
+      "parent_id": "SRC-4",
+      "units": [
+        {
+          "unit_id": "SRC-4.2-U001",
+          "content_hash": "3f1a9c2e7b6d4a10",
+          "section_id": "SRC-4.2",
+          "seq": 120,
+          "unit_type": "procedure_step",
+          "text": "The Process Owner creates a deviation record.",
+          "list_level": 0,
+          "list_number": "1",
+          "location": {"page": 12, "paragraph_index": 210, "xml_path": "/w:body/w:p[210]"}
+        },
+        {
+          "unit_id": "SRC-4.2-U002",
+          "content_hash": "8c0d2b4f6e1a3c57",
+          "section_id": "SRC-4.2",
+          "seq": 121,
+          "unit_type": "procedure_step",
+          "text": "The Process Owner submits the deviation within five business days.",
+          "list_level": 0,
+          "list_number": "2",
+          "location": {"page": 12, "paragraph_index": 211}
+        },
+        {
+          "unit_id": "SRC-4.2-U003",
+          "content_hash": "b27e5d9a0c4f1e68",
+          "section_id": "SRC-4.2",
+          "seq": 122,
+          "unit_type": "warning",
+          "text": "Warning: The Process Owner must not close the deviation until Quality Assurance approves it (see Section 5.1).",
+          "location": {"page": 12, "paragraph_index": 212},
+          "relations": [{"type": "warning_for", "target_unit_id": "SRC-4.2-U002"}]
+        },
+        {
+          "unit_id": "SRC-4.2-U004",
+          "content_hash": "e91c7a3b5d2f0846",
+          "section_id": "SRC-4.2",
+          "seq": 123,
+          "unit_type": "table_row",
+          "text": "Minor | 30 calendar days",
+          "table_ref": {
+            "table_id": "SRC-4.2-T1",
+            "row_index": 1,
+            "header_cells": ["Classification", "Closure deadline"],
+            "cells": [
+              {"col": 0, "text": "Minor"},
+              {"col": 1, "text": "30 calendar days"}
+            ]
+          },
+          "location": {"page": 13}
+        }
+      ]
+    }
+  ],
+  "cross_references": [
+    {
+      "ref_id": "XREF-001",
+      "from_unit_id": "SRC-4.2-U003",
+      "raw_text": "see Section 5.1",
+      "ref_kind": "section",
+      "target": "SRC-5.1",
+      "resolution": "resolved"
+    }
+  ]
+}
