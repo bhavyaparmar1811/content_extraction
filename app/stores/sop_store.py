@@ -58,6 +58,9 @@ class SopStore:
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(sop_records)")}
             if "units_path" not in columns:
                 conn.execute("ALTER TABLE sop_records ADD COLUMN units_path TEXT")  # v2 SourceDocument JSON
+            for column in ("migrated_path", "migrated_job_id", "migrated_at"):  # v2 final export (Phase 12)
+                if column not in columns:
+                    conn.execute(f"ALTER TABLE sop_records ADD COLUMN {column} TEXT")
             conn.commit()
 
     def get_next_version(self, document_uid: str) -> int:
@@ -180,6 +183,17 @@ class SopStore:
             conn.execute(
                 "UPDATE sop_records SET status = ?, updated_at = ? WHERE id = ?",
                 (new_status, now, record_id),
+            )
+            conn.commit()
+            return self.get_record_by_id(record_id)
+
+    def mark_migrated(self, record_id: int, job_id: str, path: str) -> Optional[dict[str, Any]]:
+        """This SOP version was exported by a v2 migration job: the final Word file it produced."""
+        now = datetime.utcnow().isoformat() + "Z"
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE sop_records SET migrated_path = ?, migrated_job_id = ?, migrated_at = ?, updated_at = ? WHERE id = ?",
+                (path, job_id, now, now, record_id),
             )
             conn.commit()
             return self.get_record_by_id(record_id)

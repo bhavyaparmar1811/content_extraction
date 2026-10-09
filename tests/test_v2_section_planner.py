@@ -364,7 +364,7 @@ async def test_invalid_corrections_get_one_repair_then_are_dropped():
 
 # ── Stage and API ─────────────────────────────────────────────────────
 
-from tests.test_v2_migration_jobs import Env, _events, _wait_for  # noqa: E402
+from tests.test_v2_migration_jobs import END_STATUS, Env, _events, _wait_for  # noqa: E402
 
 
 class FakeFactory:
@@ -396,7 +396,7 @@ async def test_stage_records_llm_usage_and_falls_back_on_failure(tmp_path):
     plan = orch.artifacts.latest(job, ArtifactKind.SECTION_PLAN, SectionPlan)
     assert plan.origin.value == "rule" and plan.token_usage == {}
     assert "Azure timeout" in _events(env.store, job.job_id, "section_planner_llm_failed")[0]["detail"]["error"]
-    assert job.status == JobStatus.COMPLETED_WITH_WARNINGS  # the rule plan carries on
+    assert job.status == END_STATUS  # the rule plan carries on
 
 
 @pytest.fixture

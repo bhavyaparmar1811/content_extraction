@@ -1,4 +1,5 @@
-"""Immutable, versioned job artifacts: ``data/migrations/{job_id}/{kind}[_{scope}]_v{n}.json``.
+"""Immutable, versioned job artifacts: ``data/migrations/{job_id}/{kind}[_{scope}]_v{n}.json``
+(``.docx`` for the rendered document).
 
 A write never overwrites. Each one gets the next version for its (kind, scope),
 a sha256 of the exact bytes on disk, and an ``ArtifactRef`` in the store.
@@ -63,6 +64,36 @@ class ArtifactWriter:
         )
         self.store.add_artifact(job_id, ref)
         return ref
+
+    def write_file(
+        self,
+        job_id: str,
+        kind: ArtifactKind,
+        data: bytes,
+        suffix: str,
+        scope: Optional[str] = None,
+        created_by: Optional[str] = None,
+    ) -> ArtifactRef:
+        """A binary artifact (the rendered ``.docx``): ``{kind}[_{scope}]_v{n}{suffix}``, same rules as ``write``."""
+        version = self.store.next_artifact_version(job_id, kind, scope)
+        path = self.job_dir(job_id) / f"{kind.value}{'_' + _safe(scope) if scope else ''}_v{version}{suffix}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            raise FileExistsError(path)
+        path.write_bytes(data)
+        ref = ArtifactRef(
+            kind=kind, version=version, path=str(path), sha256=hashlib.sha256(data).hexdigest(),
+            scope=scope, created_at=datetime.now(timezone.utc), created_by=created_by,
+        )
+        self.store.add_artifact(job_id, ref)
+        return ref
+
+    @staticmethod
+    def read_bytes(ref: ArtifactRef) -> bytes:
+        raw = Path(ref.path).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != ref.sha256:
+            raise ArtifactCorrupted(f"{ref.path} does not match its recorded sha256")
+        return raw
 
     @staticmethod
     def read(ref: ArtifactRef) -> dict:

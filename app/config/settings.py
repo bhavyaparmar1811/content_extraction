@@ -80,6 +80,16 @@ class Settings(BaseSettings):
     slot_planner_llm: str = "confirm"      # "confirm": LLM checks doubtful slot placements and proposes callouts; "off": rules only
     slot_planner_preview_chars: int = 160  # passage preview length in the slot planner prompt
     slot_planner_block_tokens: int = 5000  # passage tokens per slot planner call; larger sections are split
+    drafter_llm: str = "on"                # "on": rewrite (GWP) and split shared passages via the LLM; "off": copy every passage
+    drafter_block_tokens: int = 1500       # source passage tokens per rewrite call (larger blocks made gpt-4o skip passages)
+    drafter_max_rules: int = 40            # STY + PRES rules sent per rewrite call (deduplicated)
+    drafter_memory_tokens: int = 600       # cap on the bounded memory (role names, abbreviations, reference targets)
+    critic_llm: str = "on"                 # "on": the semantic critic reads every reworded claim; "off": deterministic checks only
+    critic_block_tokens: int = 3000        # claim + source tokens per critic call; larger sections are split
+    repair_max_attempts: int = 2           # repair rounds per section before it needs human review
+    reconcile_llm: str = "gwp"             # "gwp": cross-section LLM check when the job rewrites (a GWP); "on": always; "off"
+    reconcile_max_chars: int = 60_000      # the document's claims sent in the one reconciliation call; larger: skipped
+    render_toc_pages: str = "word"         # "word": TOC page numbers measured by Microsoft Word when installed; "off": Word fills them on opening
 
     # --- LLM (LangChain) ---
     use_llm_section_summarizer: bool = False  # false = Mode A (programmatic), true = Mode B (LLM semantic)

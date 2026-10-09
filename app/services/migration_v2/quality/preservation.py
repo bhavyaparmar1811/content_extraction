@@ -8,6 +8,7 @@ a false alarm. Claims are read with the same extractors as the source.
     compare_references  document, form and system IDs, e-mail addresses, URLs           (PRES-006)
     compare_modality    must / must not / should / may, including imperatives            (PRES-004)
     compare_roles       roles dropped from, or introduced into, the cited content        (PRES-003)
+    compare_quotes      quoted document or system names without an ID                     (PRES-006)
 
 They run whether or not the job has a GWP. Units no claim cites are left to the
 coverage gate (Phase 10).
@@ -23,6 +24,7 @@ from typing import Iterable, Optional
 
 from app.schemas.v2 import (
     Claim,
+    ClaimKind,
     FactKind,
     Gate,
     IssueCategory,
@@ -35,7 +37,7 @@ from app.schemas.v2 import (
     ValidationIssue,
 )
 
-from .facts import extract_values, find_roles, text_modalities
+from .facts import extract_values, find_roles, protected_units, text_modalities
 from .normalize import PreservationConfig
 
 _TIME_KINDS = {FactKind.DATE, FactKind.DURATION, FactKind.FREQUENCY, FactKind.DEADLINE}
@@ -60,7 +62,7 @@ def placed_claims(drafts: Iterable[SectionDraft]) -> list[PlacedClaim]:
         for draft in drafts
         for slot in draft.slots
         for claim in slot.claims
-        if not claim.is_gap_marker
+        if not claim.is_gap_marker and claim.kind != ClaimKind.HEADING  # headings are source headings, copied as is
     ]
 
 
@@ -226,18 +228,32 @@ def _words(modalities: set[Modality]) -> str:
     return ", ".join(_MODAL_WORDS[m] for m in sorted(modalities, key=lambda m: list(_MODAL_WORDS).index(m))) or "none"
 
 
-def compare_modality(facts: ProtectedFacts, claims: list[PlacedClaim]) -> list[ValidationIssue]:
+def compare_modality(facts: ProtectedFacts, claims: list[PlacedClaim],
+                     source_doc: Optional[SourceDocument] = None) -> list[ValidationIssue]:
     """Obligation strength per unit. A plain statement made explicit ('submits' → 'must submit' or an
-    imperative) is allowed; anything that removes, weakens or strengthens a stated modality is not."""
+    imperative) is allowed but listed for review (medium, no gate); anything that removes, weakens or
+    strengthens a stated modality is not."""
     source: dict[str, set[Modality]] = defaultdict(set)
     for o in facts.obligations:
         if o.modality in _MODAL_WORDS:
             source[o.unit_id].add(o.modality)
+    plain = set()  # protected passages whose own text states no obligation at all
+    if source_doc is not None:
+        plain = {u.unit_id for u in protected_units(source_doc) if not (text_modalities([u.text]) & set(_MODAL_WORDS))}
     issues = []
     for unit_id, cited_by in _by_unit(claims).items():
         s = source.get(unit_id, set())
         c = text_modalities(pc.claim.text for pc in cited_by) & set(_MODAL_WORDS)
         lost, added = s - c, c - s
+        if not lost and added == {Modality.MANDATORY} and not s and unit_id in plain:
+            # Allowed (the GWP asks for "must" on mandatory steps), but a reviewer sees each one.
+            issues.append(_issue(
+                "made_mandatory", unit_id, Severity.MEDIUM, None,
+                f"[PRES-004] {unit_id} states no obligation; the draft makes it mandatory ('must' or an instruction). "
+                "Check that the source means it as a requirement.",
+                [unit_id], cited_by,
+            ))
+            continue
         if not lost and not (added - {Modality.MANDATORY}):
             continue
         severe = bool(lost & {Modality.PROHIBITION, Modality.MANDATORY})
@@ -308,6 +324,35 @@ def compare_roles(facts: ProtectedFacts, source: SourceDocument, claims: list[Pl
     return issues
 
 
+# ── Quoted names ──────────────────────────────────────────────────────
+
+# A quoted title or name: "Refer to “UiPath Development Guideline”." The replacement character stands for quotes the
+# extraction could not decode. The name must start with a capital and close before a non-letter, so "RPAS’s" is no quote.
+_QUOTED = re.compile(r"[“\"„«�]([A-Z0-9][^“”\"„«»�]{2,80}?)[”\"»�](?![A-Za-z])")
+
+
+def quoted_names(text: str) -> list[str]:
+    return [m.group(1).strip() for m in _QUOTED.finditer(text or "") if len(m.group(1).split()) >= 2]
+
+
+def compare_quotes(source: SourceDocument, claims: list[PlacedClaim]) -> list[ValidationIssue]:
+    """PRES-006 for names without an ID: a quoted document or system title in the source is kept, word for word."""
+    units = {u.unit_id: u for u in source.iter_units()}
+    issues = []
+    for unit_id, cited_by in _by_unit(claims).items():
+        if unit_id not in units:
+            continue
+        drafted = re.sub(r"\s+", " ", " ".join(pc.claim.text for pc in cited_by)).lower()
+        for name in quoted_names(units[unit_id].text):
+            if re.sub(r"\s+", " ", name).lower() not in drafted:
+                issues.append(_issue(
+                    "quoted", name, Severity.HIGH, Gate.HIGH_RISK_UNRESOLVED,
+                    f"[PRES-006] quoted name '{name}' from {unit_id} is missing from the claims that cite it.",
+                    [unit_id], cited_by,
+                ))
+    return issues
+
+
 # ── All checks ────────────────────────────────────────────────────────
 
 
@@ -321,6 +366,7 @@ def check_preservation(
     return (
         compare_values(facts, source, claims, config)
         + compare_references(facts, source, claims, config)
-        + compare_modality(facts, claims)
+        + compare_modality(facts, claims, source)
         + compare_roles(facts, source, claims)
+        + compare_quotes(source, claims)
     )

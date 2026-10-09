@@ -96,12 +96,30 @@ class ValidationIssue(V2Model):
     resolution_note: Optional[str] = None
 
 
+class RiskTag(str, Enum):
+    """High-risk content that needs direct human review (migration_plan.md section 21)."""
+
+    ACCEPTANCE_CRITERIA = "acceptance_criteria"
+    SAFETY = "safety"
+    REGULATORY = "regulatory"
+    APPROVAL = "approval"
+    DEADLINE = "deadline"
+    NUMERIC_LIMIT = "numeric_limit"
+    RETENTION = "retention"
+    ESCALATION = "escalation"
+    PROHIBITION = "prohibition"
+
+
 class QualityReport(V2Model):
     job_id: str
     version: int = Field(ge=1)
     issues: list[ValidationIssue] = Field(default_factory=list)
     unit_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
     soft_scores: dict[str, float] = Field(default_factory=dict)
+    high_risk_units: dict[str, list[RiskTag]] = Field(
+        default_factory=dict, description="Source unit -> why its content is high-risk (gates report only)"
+    )
+    gate_counts: dict[Gate, int] = Field(default_factory=dict, description="Open issues per hard gate, zeros included")
 
     @property
     def open_gate_issues(self) -> list[ValidationIssue]:

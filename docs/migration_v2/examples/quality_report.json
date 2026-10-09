@@ -2,7 +2,29 @@
   "job_id": "MIG-0001",
   "version": 1,
   "unit_coverage": 0.97,
-  "soft_scores": {"gwp_compliance": 0.88, "terminology_consistency": 1.0},
+  "soft_scores": {
+    "unit_coverage": 0.97,
+    "gwp_style_compliance": 0.88,
+    "passive_ratio": 0.21,
+    "flesch_reading_ease": 41.5,
+    "fk_grade": 11.2,
+    "reworded_share": 0.6
+  },
+  "high_risk_units": {
+    "SRC-4.2-U002": ["deadline"],
+    "SRC-4.2-U003": ["approval", "prohibition"],
+    "SRC-4.2-U004": ["deadline"]
+  },
+  "gate_counts": {
+    "unsupported_claim": 0,
+    "numerical_change": 1,
+    "missing_section": 0,
+    "missing_slot": 0,
+    "broken_cross_reference": 0,
+    "unaccounted_source": 0,
+    "high_risk_unresolved": 0,
+    "sequence_violation": 0
+  },
   "issues": [
     {
       "issue_id": "ISS-001",
@@ -14,17 +36,31 @@
       "slot_id": "TGT-3-TIMING",
       "claim_ids": ["C-TGT-3-004"],
       "unit_ids": ["SRC-4.2-U004"],
-      "message": "Source value '30 calendar days' (SRC-4.2-U004) does not appear in any claim."
+      "message": "[PRES-002] duration '30 calendar days' from SRC-4.2-U004 is missing from the claims that cite it."
     },
     {
       "issue_id": "ISS-002",
-      "severity": "medium",
-      "category": "semantic",
+      "severity": "high",
+      "category": "preservation",
       "source": "critic",
       "target_section_id": "TGT-3",
-      "message": "Responsibility slot does not mention who approves the deviation.",
+      "slot_id": "TGT-3-RESPONSIBILITY",
+      "claim_ids": ["C-TGT-3-002"],
+      "unit_ids": ["SRC-4.2-U003"],
+      "message": "[critic:omission] C-TGT-3-002: the draft does not say that Quality Assurance approves the closure.",
       "resolved": true,
-      "resolution_note": "Repaired in section_draft v2."
+      "resolution_note": "reviewer-1: Repaired in section_draft v2."
+    },
+    {
+      "issue_id": "ISS-003",
+      "severity": "low",
+      "category": "semantic",
+      "source": "deterministic",
+      "target_section_id": "TGT-3",
+      "slot_id": "TGT-3-STEPS",
+      "claim_ids": ["C-TGT-3-001"],
+      "unit_ids": ["SRC-4.2-U001"],
+      "message": "[GWP] C-TGT-3-001: STY-005 1 sentence(s) over 20 words (24)."
     }
   ]
 }

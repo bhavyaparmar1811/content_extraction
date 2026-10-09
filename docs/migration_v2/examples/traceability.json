@@ -1,0 +1,19 @@
+{
+  "job_id": "MIG-20261002-1A2B3C4D",
+  "source_file": "BI-VQD-10095-S.docx",
+  "generated_at": "2026-10-10T09:15:00Z",
+  "rows": [
+    {"claim_id": "C-TGT-3-001", "target_section_id": "TGT-3", "target_number": "3", "slot_id": "TGT-3-STEPS",
+     "kind": "step", "text": "The Process Owner creates a deviation record.", "draft_version": 2, "draft_origin": "llm",
+     "rule_ids_applied": ["STY-001"], "unit_id": "SRC-4.2-U001", "source_section_id": "SRC-4.2",
+     "source_section_number": "4.2", "source_section_heading": "Deviation Processing", "unit_type": "procedure_step",
+     "paragraph_index": 41, "gap_marker": false},
+    {"claim_id": "C-TGT-2-003", "target_section_id": "TGT-2", "target_number": "2", "slot_id": "TGT-2-GEOGRAPHY",
+     "kind": "paragraph", "text": "independent of the country or site.", "draft_version": 1, "draft_origin": "llm",
+     "unit_id": "SRC-2-U001", "part": "independent of the country or site.", "source_section_id": "SRC-2",
+     "source_section_number": "2", "source_section_heading": "SCOPE", "unit_type": "paragraph", "paragraph_index": 12,
+     "gap_marker": false},
+    {"claim_id": "C-TGT-3-009", "target_section_id": "TGT-3", "target_number": "3", "slot_id": "TGT-3-TIMING",
+     "kind": "paragraph", "text": "Source content not found", "draft_version": 2, "draft_origin": "llm", "gap_marker": true}
+  ]
+}

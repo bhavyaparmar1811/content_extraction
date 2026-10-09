@@ -1,0 +1,62 @@
+{
+  "job_id": "MIG-20261009-3FA2C91B",
+  "version": 1,
+  "mode": "review",
+  "template_file": "data/template_output/TPL_v1_normalized.docx",
+  "draft_versions": {
+    "TGT-1": 1,
+    "TGT-2": 1,
+    "TGT-6": 3
+  },
+  "slots": [
+    {
+      "slot_id": "TGT-1-WHAT",
+      "outcome": "filled",
+      "claims": 1
+    },
+    {
+      "slot_id": "TGT-2-GEOGRAPHY",
+      "outcome": "gap_marker",
+      "claims": 0
+    },
+    {
+      "slot_id": "TGT-2-NOT_COVERED",
+      "outcome": "removed_empty",
+      "claims": 0
+    },
+    {
+      "slot_id": "TGT-5-ROLES",
+      "outcome": "filled",
+      "claims": 7,
+      "tables": 2
+    },
+    {
+      "slot_id": "TGT-6-CONTENT",
+      "outcome": "filled",
+      "claims": 29,
+      "tables": 1,
+      "callout_boxes": 3
+    }
+  ],
+  "regions": [
+    {
+      "region_id": "p:26",
+      "outcome": "choice_applied",
+      "choice": "SOP"
+    },
+    {
+      "region_id": "t:7",
+      "outcome": "removed",
+      "note": "kept only when the slot plan keeps it"
+    }
+  ],
+  "sections_removed": [
+    "TGT-9"
+  ],
+  "warnings": [
+    "TGT-10-ENTRIES: source table SRC-9-T1 (Version | Description of Changes | Author | Expert team) does not fit the template table (Version | Description of Changes | Author); written with its own columns"
+  ],
+  "problems": [],
+  "toc_entries": 17,
+  "toc_page_numbers": true
+}

@@ -2,13 +2,19 @@
   "target_section_id": "TGT-3",
   "version": 1,
   "origin": "llm",
-  "prompt_version": "drafter-2026-10-01",
-  "model": "google_genai:gemini-2.5-flash",
+  "prompt_version": "drafter/3",
+  "model": "azure/gpt-4o-poc",
   "slots": [
     {
       "slot_id": "TGT-3-STEPS",
       "rendering": "ordered_list",
       "claims": [
+        {
+          "claim_id": "C-TGT-3-000",
+          "kind": "heading",
+          "text": "Deviation Processing",
+          "source_section_id": "SRC-4.2"
+        },
         {
           "claim_id": "C-TGT-3-001",
           "text": "Create the deviation record.",
@@ -17,7 +23,8 @@
           ],
           "rule_ids_applied": [
             "STY-002"
-          ]
+          ],
+          "kind": "step"
         },
         {
           "claim_id": "C-TGT-3-002",
@@ -28,7 +35,8 @@
           "rule_ids_applied": [
             "STY-002",
             "PRES-004"
-          ]
+          ],
+          "kind": "step"
         },
         {
           "claim_id": "C-TGT-3-003",
@@ -46,7 +54,8 @@
           "rule_ids_applied": [
             "PRES-004"
           ],
-          "callout_kind": "attention"
+          "callout_kind": "attention",
+          "kind": "step"
         }
       ]
     },

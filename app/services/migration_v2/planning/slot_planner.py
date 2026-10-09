@@ -7,6 +7,9 @@ section the section plan gave it.
    - A section with one content slot takes everything.
    - Table-only sections place whole tables by header and cells (terms vs
      abbreviations, roles vs RACI); text lines go with the table they introduce.
+     Narrative and figures there (a run of passages with a figure, a caption or
+     long text) go below the section's tables: into its last table slot, after
+     the rows (``SlotMapping.below_unit_ids``). The LLM does not move them.
    - Other sections use icon rows (by position, when the counts match) and cue
      words from each slot's own instruction. A passage that states several
      things (roles, units and geography in one sentence) feeds several slots.
@@ -16,8 +19,10 @@ section the section plan gave it.
 2. ``confirm``: per token-bounded block, the LLM sees the slots, the callout
    palette, the job's GWP structural and formatting rules, and one line per
    passage with its proposed slots. It resolves the [CHECK] lines, proposes
-   callouts (palette kinds only) and flags doubts. Invalid items get one repair
-   retry, then are dropped.
+   callouts (palette kinds only) and flags doubts. It cannot take a passage the
+   rules placed out of every slot: nothing is dropped by the LLM (a passage left
+   in no slot is a blocking issue for the reviewer, ``gates.unplaced_issues``).
+   Invalid items get one repair retry, then are dropped.
 3. ``build_plan``: a ``SlotPlan`` with, per slot, the ordered units, the
    migration action and the GWP rule IDs the drafter will apply. Empty required
    slots are ``source_content_not_found`` (a gap for the reviewer); empty
@@ -133,6 +138,7 @@ class Placement:
     reason: str
     origin: MappingOrigin = MappingOrigin.RULE
     check: Optional[str] = None       # the matcher's doubt, shown to the LLM as [CHECK]
+    below: bool = False               # shown below the section's tables (after the slot's rows)
 
 
 @dataclass
@@ -275,6 +281,33 @@ class SlotPlanner:
             return slot.slot_id, f"table '{_clip(headers, 60)}' (closest instruction)", "no table cue"
         return slots[0].slot_id, f"table '{_clip(headers, 60)}'", "no table cue matched any slot"
 
+    @staticmethod
+    def _introduces_table(unit: SourceUnit) -> bool:
+        text = unit.text.strip()
+        return text.endswith(":") or bool(re.search(r"\b(?:following|below)\b[^.]{0,40}\btables?\b|\btables?\s+below\b", text, re.I))
+
+    def _below_tables(self, items: list[list[SourceUnit]], table_slot: dict[int, str]) -> set[str]:
+        """Narrative and figures of a table section: runs of passages between or after the tables that hold a figure,
+        a caption or long text. A line that introduces the table right after it stays with that table."""
+        below: set[str] = set()
+        i = 0
+        while i < len(items):
+            if i in table_slot:
+                i += 1
+                continue
+            j = i
+            while j < len(items) and j not in table_slot:
+                j += 1
+            run = [item[0] for item in items[i:j]]
+            if any(u.unit_type in (UnitType.FIGURE, UnitType.CAPTION)
+                   or (len(u.text.strip()) > LONG_TEXT_IN_TABLE_SLOT and not self._introduces_table(u)) for u in run):
+                if j < len(items) and run[-1].unit_type not in (UnitType.FIGURE, UnitType.CAPTION) \
+                        and self._introduces_table(run[-1]):
+                    run = run[:-1]
+                below.update(u.unit_id for u in run)
+            i = j
+        return below
+
     def _place_tables(self, work: SectionWork, units: list[SourceUnit], slots: list[TargetSlot]) -> None:
         items = self._items(units)
         table_slot: dict[int, str] = {}
@@ -287,19 +320,21 @@ class SlotPlanner:
             for row in item:
                 work.placements[row.unit_id] = Placement([slot_id], reason, check=check)
 
+        below = self._below_tables(items, table_slot)
+        with_rows = set(table_slot.values())
+        last = max((s for s in slots if s.slot_id in with_rows), key=lambda s: s.display_order, default=slots[-1])
         for i, item in enumerate(items):
             if i in table_slot:
                 continue
             unit = item[0]
-            if unit.unit_type in (UnitType.FIGURE, UnitType.CAPTION):
+            if unit.unit_id in below:
                 work.placements[unit.unit_id] = Placement(
-                    [], "figure in a section of tables",
-                    check="figure in a section of tables: keep it beside a table, move it, or drop it")
+                    [last.slot_id], "narrative or figure of a table section: below the section's tables", below=True)
                 continue
             before = next((table_slot[j] for j in range(i - 1, -1, -1) if j in table_slot), None)
             after = next((table_slot[j] for j in range(i + 1, len(items)) if j in table_slot), None)
             text = unit.text.strip()
-            intro = text.endswith(":") or bool(re.search(r"\b(?:following|below)\b[^.]{0,40}\btables?\b|\btables?\s+below\b", text, re.I))
+            intro = self._introduces_table(unit)
             slot_id = (after if intro and after else before or after) or slots[0].slot_id
             check = None
             if len(text) > LONG_TEXT_IN_TABLE_SLOT:
@@ -402,6 +437,7 @@ class SlotPlanner:
             placement = work.placements[first.unit_id]
             refs = ", ".join(work.ref(s).split(".", 1)[1] for s in placement.slot_ids) or "none"
             mark = f" [CHECK: {placement.check}]" if placement.check else ""
+            mark += " [BELOW TABLES]" if placement.below else ""
             kind = work.callout_of(first.unit_id)
             mark += f" [CALLOUT: {kind.value}]" if kind else ""
             if is_table_row(first) and len(item) > 1:
@@ -485,6 +521,12 @@ class SlotPlanner:
         if not change.slot_refs and len(content) == 1 and content[0].content_type != ContentType.SUPPORTING_INFORMATION:
             return [f"{work.target.key} has one content slot, which takes every passage of the section; "
                     "a passage that belongs to another section is a section-plan matter: flag it instead"]
+        fixed = [u for u in change.unit_ids if work.placements.get(u) and work.placements[u].below]
+        if fixed:
+            return [f"{fixed} are placed below the section's tables by rule; leave them (flag them if they look wrong)"]
+        placed = [u for u in change.unit_ids if work.placements.get(u) and work.placements[u].slot_ids]
+        if not change.slot_refs and placed:
+            return [f"{placed} have slots; a passage is never dropped: name the slot it fits, or flag it instead"]
         return []
 
     def callout_problems(self, proposal: SlotProposal, block: Block, callout: CalloutProposal) -> list[str]:
@@ -625,6 +667,7 @@ class SlotPlanner:
                                                 note=note, requires_human_review=status == MappingStatus.SOURCE_CONTENT_NOT_FOUND))
                     continue
                 placements = [work.placements[u] for u in ids if u in work.placements]
+                below = [u for u in ids if work.placements.get(u) is not None and work.placements[u].below]
                 doubts = list(dict.fromkeys(p.check for p in placements if p.check)) if unconfirmed_review else []
                 origin_here = callout_origin.get(slot.slot_id) or (
                     MappingOrigin.LLM if any(p.origin == MappingOrigin.LLM for p in placements) else MappingOrigin.RULE)
@@ -632,6 +675,7 @@ class SlotPlanner:
                     slot_id=slot.slot_id,
                     source_unit_ids=ids,
                     extraction_scope=[slot.key] if slot.key and shared.intersection(ids) else [],
+                    below_unit_ids=below,
                     migration_action=self.action_for(slot),
                     status=MappingStatus.NEEDS_REVIEW if doubts else MappingStatus.MAPPED,
                     requires_human_review=bool(doubts),

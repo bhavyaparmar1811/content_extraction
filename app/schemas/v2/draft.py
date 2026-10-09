@@ -18,16 +18,30 @@ class EvidenceSpan(V2Model):
     end: int = Field(ge=0)
 
 
+class ClaimKind(str, Enum):
+    """How a claim renders. Tables, figures, captions and headings are copied, never rewritten."""
+
+    PARAGRAPH = "paragraph"
+    BULLET = "bullet"
+    STEP = "step"            # numbered list item
+    TABLE_ROW = "table_row"  # cells come from the cited unit's table_ref
+    FIGURE = "figure"        # the image comes from the cited unit's figure asset
+    CAPTION = "caption"
+    HEADING = "heading"      # a source sub-heading kept inside a template section; cites source_section_id
+
+
 class Claim(V2Model):
     """One atomic statement in the migrated document.
 
     Every claim must cite the source units it came from. Gap markers are the
-    only claims allowed without sources.
+    only claims allowed without sources; a heading cites its source section.
     """
 
     claim_id: str
     text: str
+    kind: ClaimKind = ClaimKind.PARAGRAPH
     source_unit_ids: list[str] = Field(default_factory=list)
+    source_section_id: Optional[str] = Field(default=None, description="For headings: the source section they come from")
     spans: list[EvidenceSpan] = Field(default_factory=list)
     rule_ids_applied: list[str] = Field(default_factory=list)
     derived_from_claim_ids: list[str] = Field(
@@ -41,7 +55,10 @@ class Claim(V2Model):
 
     @model_validator(mode="after")
     def _must_cite(self) -> "Claim":
-        if not self.is_gap_marker and not self.source_unit_ids:
+        if self.kind == ClaimKind.HEADING:
+            if not self.source_section_id:
+                raise ValueError(f"heading claim {self.claim_id} has no source_section_id")
+        elif not self.is_gap_marker and not self.source_unit_ids:
             raise ValueError(f"claim {self.claim_id} has no source_unit_ids")
         return self
 
@@ -59,6 +76,7 @@ class SlotDraft(V2Model):
 class DraftOrigin(str, Enum):
     LLM = "llm"
     REPAIR = "repair"
+    RECONCILE = "reconcile"  # a cross-section patch from reconciliation (Phase 12), applied only if it re-validates
     HUMAN = "human"
 
 

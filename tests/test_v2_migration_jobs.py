@@ -34,7 +34,9 @@ from app.stores.sop_store import SopStore
 from app.stores.template_store import TemplateStore
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "docs" / "migration_v2" / "examples"
-STUB_STAGES = {"DRAFTING", "VALIDATING", "ASSEMBLING", "RECONCILING", "QUALITY_REVIEW"}
+STUB_STAGES: set[str] = set()  # every stage is real since Phase 12
+# The example SOP has no steps for the template's required 'steps' slot: the gap waits for a reviewer.
+END_STATUS = JobStatus.HUMAN_REVIEW_REQUIRED
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -182,14 +184,15 @@ async def test_auto_mode_runs_through_stubbed_stages(env):
     job = env.create(orch)
     job = await orch.wait(job.job_id)
 
-    assert job.status == JobStatus.COMPLETED_WITH_WARNINGS  # stubs never claim a clean completion
+    assert job.status == END_STATUS
     kinds = {a.kind for a in job.artifacts}
     assert kinds == {ArtifactKind.SOURCE_MODEL, ArtifactKind.TEMPLATE_MODEL, ArtifactKind.GWP_RULES,
                      ArtifactKind.PROTECTED_FACTS, ArtifactKind.SECTION_PLAN, ArtifactKind.QUALITY_REPORT,
-                     ArtifactKind.SLOT_PLAN}
+                     ArtifactKind.SLOT_PLAN, ArtifactKind.SECTION_DRAFT, ArtifactKind.NUMBER_MAP,
+                     ArtifactKind.ASSEMBLED_DRAFT}  # no document: the example template has no file to render into
     assert job.latest_artifact(ArtifactKind.QUALITY_REPORT, "section_plan") is not None
     assert [s.target_section_id for s in job.sections] == ["TGT-3"]
-    assert job.sections[0].status == SectionStatus.SLOT_PLANNED
+    assert job.sections[0].status == SectionStatus.VALIDATED
 
     rules = orch.artifacts.latest(job, ArtifactKind.GWP_RULES, GwpRuleSet)
     assert {r.rule_id for r in rules.rules} == BASELINE_IDS
@@ -205,7 +208,7 @@ async def test_auto_mode_runs_through_stubbed_stages(env):
 
     transitions = [e["to_status"] for e in env.store.list_events(job.job_id) if e["to_status"]]
     assert transitions == ["PENDING", "PARSING", "PLANNING_SECTIONS", "PLANNING_SLOTS", "DRAFTING", "VALIDATING",
-                           "ASSEMBLING", "RECONCILING", "QUALITY_REVIEW", "COMPLETED_WITH_WARNINGS"]
+                           "ASSEMBLING", "RECONCILING", "RENDERING", "QUALITY_REVIEW", END_STATUS.value]
 
 
 async def test_gwp_is_used_only_when_named(env):
@@ -213,7 +216,7 @@ async def test_gwp_is_used_only_when_named(env):
     orch = env.orchestrator()
 
     without = await orch.wait(env.create(orch).job_id)
-    assert without.status == JobStatus.COMPLETED_WITH_WARNINGS and without.gwp_id is None
+    assert without.status == END_STATUS and without.gwp_id is None
     assert orch.artifacts.latest(without, ArtifactKind.GWP_RULES, GwpRuleSet).guide_id == "BASELINE"
 
     job = await orch.wait(env.create(orch, gwp_id="GWP").job_id)
@@ -237,7 +240,7 @@ async def test_review_mode_pauses_for_both_plans(env):
 
     orch.approve(job.job_id, JobStatus.SLOT_PLAN_REVIEW_PENDING, "reviewer")
     job = await orch.wait(job.job_id)
-    assert job.status == JobStatus.COMPLETED_WITH_WARNINGS
+    assert job.status == END_STATUS
     assert orch.artifacts.latest(job, ArtifactKind.SLOT_PLAN, SlotPlan).approved_by == "reviewer"
     assert [e["actor"] for e in _events(env.store, job.job_id, "approved")] == ["reviewer", "reviewer"]
 
@@ -259,7 +262,7 @@ async def test_failure_records_stage_and_retry_resumes_there(env):
     parsing_versions = len([a for a in job.artifacts if a.kind == ArtifactKind.SOURCE_MODEL])
     orch.retry(job.job_id, None, "operator")  # defaults to the failed stage
     job = await orch.wait(job.job_id)
-    assert job.status == JobStatus.COMPLETED_WITH_WARNINGS and job.error is None and calls["n"] == 2
+    assert job.status == END_STATUS and job.error is None and calls["n"] == 2
     assert len([a for a in job.artifacts if a.kind == ArtifactKind.SOURCE_MODEL]) == parsing_versions  # PARSING not re-run
 
     with pytest.raises(JobStateError) as e:
@@ -307,7 +310,7 @@ async def test_cancel_paused_running_and_finished_jobs(env):
     assert _events(env.store, job.job_id, "cancel_requested")
 
     orch.retry(job.job_id, JobStatus.DRAFTING, "me")  # a cancelled job can be restarted
-    assert (await orch.wait(job.job_id)).status == JobStatus.COMPLETED_WITH_WARNINGS
+    assert (await orch.wait(job.job_id)).status == END_STATUS
 
 
 async def test_jobs_survive_a_restart(env):
@@ -327,7 +330,7 @@ async def test_jobs_survive_a_restart(env):
     second = env.orchestrator()  # a new process on the same database
     assert second.resume_incomplete() == [job.job_id]
     job = await second.wait(job.job_id)
-    assert job.status == JobStatus.COMPLETED_WITH_WARNINGS
+    assert job.status == END_STATUS
     assert _events(env.store, job.job_id, "resumed")
     # A job waiting for a human is not resumed.
     paused = await second.wait(env.create(second, JobMode.REVIEW).job_id)
@@ -355,6 +358,17 @@ def api(env):
             app.state.migration_orchestrator = previous
             app.dependency_overrides.pop(get_settings, None)
             app.dependency_overrides.pop(require_user, None)
+
+
+def resolve_dangling_reference(client, job_id: str) -> dict:
+    """The example SOP says "see Section 5.1", a section it does not have: Phase 12 blocks on the broken reference
+    until a reviewer accepts it. Returns the resolve response."""
+    report = client.get(f"/api/v1/migrations/{job_id}/validation").json()
+    issue = next(i for i in report["issues"] if i.get("gate") == "broken_cross_reference" and not i.get("resolved"))
+    assert "'see Section 5.1'" in issue["message"]
+    done = client.post(f"/api/v1/migrations/{job_id}/issues/{issue['issue_id']}/resolve", json={"note": "kept as written"})
+    assert done.status_code == 200, done.text
+    return done.json()
 
 
 def _wait_for(client, job_id: str, statuses: set[str], timeout: float = 10.0) -> dict:
@@ -420,6 +434,10 @@ def test_api_review_flow_end_to_end(api, env):
     slot_plan["sections"][0]["callout_assignments"] = []
     assert client.patch(f"/api/v1/migrations/{job_id}/slot-plan", json=slot_plan).status_code == 200
     assert client.post(f"/api/v1/migrations/{job_id}/slot-plan/approve").status_code == 200
+    # The reviewer gave the 'steps' slot content, so no gap is left; the example template has no file to render.
+    # The example's reference to a section it does not have waits for the reviewer (Phase 12).
+    _wait_for(client, job_id, {"HUMAN_REVIEW_REQUIRED"})
+    assert resolve_dangling_reference(client, job_id)["status"] == "COMPLETED_WITH_WARNINGS"
     job = _wait_for(client, job_id, {"COMPLETED_WITH_WARNINGS"})
 
     artifacts = client.get(f"/api/v1/migrations/{job_id}/artifacts").json()
@@ -433,9 +451,13 @@ def test_api_review_flow_end_to_end(api, env):
     assert [e["actor"] for e in audit if e["event"] == "approved"] == ["reviewer-1", "reviewer-1"]
     assert audit[-1]["to_status"] == "COMPLETED_WITH_WARNINGS"
 
-    assert client.get(f"/api/v1/migrations/{job_id}/validation").status_code == 404
-    assert client.get(f"/api/v1/migrations/{job_id}/traceability").status_code == 404
-    assert client.patch(f"/api/v1/migrations/{job_id}/sections/TGT-3/slots/TGT-3-STEPS").status_code == 501
+    report = client.get(f"/api/v1/migrations/{job_id}/validation").json()
+    assert report["gate_counts"]["missing_slot"] == 0 and report["unit_coverage"] == 1.0
+    trace = client.get(f"/api/v1/migrations/{job_id}/traceability").json()
+    assert trace["rows"] and all(r["unit_id"] or r["gap_marker"] or r["kind"] == "heading" for r in trace["rows"])
+    csv_text = client.get(f"/api/v1/migrations/{job_id}/traceability", params={"format": "csv"}).text
+    assert csv_text.splitlines()[0].startswith("claim_id,target_section_id,target_number")
+    assert client.patch(f"/api/v1/migrations/{job_id}/sections/TGT-3/slots/TGT-3-STEPS").status_code == 422  # body required
     assert client.post(f"/api/v1/migrations/{job_id}/cancel").status_code == 409
 
     retried = client.post(f"/api/v1/migrations/{job_id}/retry", params={"from_stage": "PLANNING_SLOTS"})

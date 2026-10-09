@@ -611,3 +611,256 @@ Entry format:
   - Unplaced figures in DEFINITIONS (028-BIS-00493 Image 1) wait for a reviewer decision, as the golden review point says.
   - Callout choices vary between runs (they are suggestions; the reviewer approves them with the slot plan).
 - **Next step:** Phase 9 (drafter). Placement mode copies per slot with `extraction_scope`; with a GWP the drafter rewrites using exactly the slot's `rule_ids` from the job's rule set, never built-in style text.
+
+## 2026-10-08: GWP rules approved
+- After committing Phase 8 (`ec9a19a`), the user asked to approve the rules. All 70 candidates of `BI-VQD-24416-G` v3 were approved through `service.approve_rules` + `save_reviewed` (as `POST /api/v1/gwp/{guide}/approve` does): 76 rules approved, 0 candidates; the guide is `approved` and the active one. `documents/GWP/BI-VQD-24416-G_v3_rules.json` is refreshed.
+- Approved as extracted, so these readings are now in force unless the user changes them: STY-005 at most 20 words per sentence; Flesch at least 30 and grade at most 12; "may" is flagged, never rewritten (PRES-004). The near-duplicates (STY-007/008, FMT-022/023, FMT-003/004/005) are approved too.
+- Check: a slot plan for BI-VQD-10505-S with the guide uses `extract_and_rewrite` on text slots and lists 47–49 rule IDs per slot.
+- **For Phase 9:** that many rules per slot is too much to paste into every drafter call. The drafter should send only the rules a slot's text can break (STY, plus PRES), group FMT rules for assembly, and merge duplicates at selection time.
+
+## 2026-10-08: Phase 9 (drafter): done
+- **Contracts** (`draft.py`, CONTRACTS.md "Drafts", `examples/section_draft.json`): `ClaimKind` (`paragraph`, `bullet`, `step`, `table_row`, `figure`, `caption`, `heading`) on `Claim.kind`; a `heading` claim cites `source_section_id` instead of units.
+- **New package `app/services/migration_v2/drafting/`:**
+  - `refs.py`: internal cross-references become `{{ref:<source id>}}` tokens before drafting; external document IDs stay as written. `detokenized` puts the source wording back for comparisons, so "described in 6.2" is not reported as a lost number.
+  - `memory.py`: bounded memory per call (role names and abbreviations found in the block, and where each reference token points), capped at `drafter_memory_tokens`.
+  - `drafter.py`: per slot, by the slot plan's `migration_action`:
+    - placement mode (no GWP) and every table slot: passages copied as written. A passage shared by several slots (`extraction_scope`) is cut to its verbatim part by one small LLM call; the answer must be a substring of the passage, else the whole passage is copied with a note;
+    - with a GWP: text passages rewritten, one call per block of about 1500 source tokens (`drafter_block_tokens`; at 2500, gpt-4o skipped whole sub-sections). The prompt carries the slots' approved STY and PRES rules from the job's rule set (checkable ones, near-duplicates dropped, at most `drafter_max_rules`), the memory, and the built-in preservation duties. Tables, figures, captions and headings are never sent;
+    - **per-passage acceptance**: a claim is dropped if it cites outside its slot or carries a foreign reference token; a passage fails if no kept claim cites it, a reference token is lost, or the Phase 6 comparators find a high or critical change. Valid claims are kept; only the failed passages get a second, targeted call (with the reasons); what fails again is copied verbatim, with one note per slot;
+    - deterministic on both paths: source sub-headings as heading claims (in a section's single free-text slot), callout kinds from the slot plan, promoted passages drafted once in place, gap markers for `source_content_not_found`, unplaced passages listed as unresolved.
+  - `checks.py`: draft checks, saved as a `quality_report` with scope `drafts`: coverage of every planned passage (`unaccounted_source`), citations inside the slot plan (`unsupported_claim`), reference tokens kept and not invented (`broken_cross_reference`), gap markers where and only where planned (`missing_slot`), the Phase 6 comparators on the detokenized drafts, and the unresolved items.
+- **Phase 6 additions found on the way:**
+  - `compare_quotes` (PRES-006): a quoted document or system name without an ID must survive. A live rewrite dropped "Refer to 'UiPath Development Guideline'" from RPAS SRC-6-U001 and nothing caught it.
+  - `compare_modality`: making a plain statement mandatory ("start with 'BI'" → "must start with") stays allowed, but each case is now a medium review item ("Check that the source means it as a requirement"). gpt-4o does this often under STY-011.
+  - Heading claims are skipped by the comparators (they are source headings: "User Account Management" is not an invented role).
+- **Prompt** `app/services/llm/prompts/v2/drafter.py`, `drafter/3`: no writing rule in the prompt text; the LLM is asked for `rule_ids_applied` only where a rule changed the wording. Its free-text notes were dropped: gpt-4o filled them with "obligation strength preserved".
+- **Stage, API:** `stages.drafting` replaces the stub (settings `drafter_llm`, `drafter_block_tokens`, `drafter_max_rules`, `drafter_memory_tokens`): one `section_draft` artifact per section, the draft report, sections `DRAFTED`, and a `drafter` event (mode, usage, counts). New `GET /drafts`, `GET /drafts/validation`, `GET /sections/{section}/draft`; `PATCH /sections/{section}/slots/{slot}` (was 501) saves a reviewer's claims as a new `human` version once the job has finished drafting, moves it to `MANUALLY_EDITED` and returns the re-run checks.
+- **Inspection:** a "Draft" check, a draft table per section (claims, kinds, callouts, citations, GWP rules applied, the source under each rewritten claim, notes), and the golden `subsections_preserved` order and `must_preserve` phrases checked in the draft. In GWP mode a reworded must-preserve phrase is a WARN "check the meaning", not a FAIL.
+- **Results on the 3 samples** (live, `gpt-4o-poc`; reports `documents/reports/` placement, `documents/reports_gwp/` GWP v3 approved):
+  - every run: unit coverage 100%, no blocking draft issue, golden sub-headings in order;
+  - placement mode: golden PASS including all must-preserve phrases; 120/159/82 claims; only 028-BIS-00493 needed an LLM call (one excerpt call, about 480 tokens);
+  - GWP mode: 43–95 claims per SOP carry rules; 2–10 passages per SOP copied verbatim after gpt-4o changed an obligation twice ("may" → "must", "must" dropped); 2 plain → mandatory review items on BI-VQD-10505-S; must-preserve phrases reworded (listed for a meaning check);
+  - cost with a GWP: 4–8 calls per SOP, about 9k–18k input and 4k–9k output tokens (about 41k input and 19k output for the 3 SOPs).
+- **Tests:** `tests/test_v2_drafter.py` (12: tokens and read-back, memory cap, placement structure without an LLM, verbatim excerpts, rewrite prompt from the job's rules, targeted retry and verbatim fallback, a failed call and a dropped quoted title, draft-check gates, stage in placement and GWP mode, API read/edit, samples in placement mode against the goldens); `tests/test_v2_drafter_live.py` (opt-in `llm`, both modes, passed); Phase 6 tests for the quote check and the review item. Full suite: 479 passed, 13 skipped.
+- **Found, not fixed:** 028-BIS-00535 (RPAS) itself contains U+FFFD replacement characters where quotes and apostrophes were ("RPAS�s", "�BI�"); they are in the DOCX's XML, not an extraction bug. The migrated document would carry them; Phase 11 or the author should fix the source.
+- **Open:**
+  - "Summary slots" derived from procedure claims: this template has none (PROCESS has one content slot), so nothing derives yet.
+  - Semantic omissions without a value, ID, quote or modality (a dropped clause) are not caught deterministically; the Phase 10 critic is for that.
+  - gpt-4o's `rule_ids_applied` is generous; Phase 10's deterministic checks (`max_sentence_words`, `forbidden_terms`, readability) will show which rules a draft really meets.
+- **Next step:** Phase 10 (validation, critic, repair, gates) over the `drafts` report, or Phase 11 (Word renderer) to see a document. The plan's order is Phase 10.
+
+## 2026-10-08: Phase 10 (validation, critic, repair, gates): done
+- Phase 9 was not committed at the start; Phases 9 and 10 are both in the working tree.
+- **Contracts** (`quality.py`, CONTRACTS.md "Quality reports", `examples/quality_report.json`): `RiskTag`; `QualityReport.high_risk_units` and `gate_counts`.
+- **New modules in `app/services/migration_v2/quality/`:**
+  - `validator.py`: the Phase 9 draft checks, plus:
+    - structure: a drafted slot must belong to its template section and have an anchor;
+    - order: claims follow source order; a procedure out of order is `sequence_violation`;
+    - placeholders: `[TBD]` and similar are high when the source does not have them, medium when it does;
+    - callouts: a claim's kind must come from its slot or the slot plan's assignments, and be in the palette.
+  - `style.py`: the job's deterministic STY rules (`max_sentence_words`, `forbidden_terms`, `passive_ratio`, `readability`) on the slots the slot plan rewrites. Findings are low issues and soft scores only.
+    - A modal word the cited source also states is not a violation, because PRES-004 wins.
+    - Syllables are estimated in code; no `textstat` dependency.
+  - `risk.py`: a deterministic high-risk classifier: acceptance criteria, safety, regulatory commitment, approval, deadline, numeric limit, retention, escalation, prohibition. It uses cue phrases plus the protected facts.
+    - A bare "GxP" or "GMP" is a domain label, not a commitment. It had tagged 28 passages of 028-BIS-00493 as regulatory.
+  - `critic.py` + prompt `critic/1`: one call per section (split at `critic_block_tokens`).
+    - It reads only reworded claims, each next to its tokenized sources, with the job's PRES rules.
+    - Problem kinds: meaning_changed, omission, condition_lost, unsupported_addition, contradiction, source_conflict, wrong_slot, ambiguity, redundancy.
+    - Findings name only claims it was shown. Ambiguity and redundancy are capped at medium.
+    - It never sets a gate. A call that fails twice leaves a low `[critic:unavailable]` note.
+  - `repair.py`: re-drafts only the passages an issue points at.
+    - `Drafter.restore` loads the saved draft into a run. The claims citing affected passages are dropped, those passages are copied or rewritten once with the issues as reasons (the drafter's per-passage checks apply), and the section is rebuilt: source order, headings, gap markers and callouts derived again.
+    - Order and callout issues need only the rebuild.
+    - Never repaired: `missing_slot`, `missing_section`, the critic's `source_conflict` and `wrong_slot`, and sections a reviewer edited.
+  - `gates.py`: the job's quality report.
+    - Gaps: one `missing_slot` issue per gap marker; resolving it accepts the slot as N/A.
+    - Missing required sections.
+    - High-risk escalation: an open medium+ deterministic finding, or a high critic finding, on a high-risk unit gets the `high_risk_unresolved` gate.
+    - One medium "reworded high-risk content" item per slot.
+    - Resolutions carry over by issue ID; `gate_counts` lists open issues per gate.
+    - `final_status`: open gate or high issue → HUMAN_REVIEW_REQUIRED; open medium issue or no DOCX yet → COMPLETED_WITH_WARNINGS; else COMPLETED.
+- **Stages:** `validating`, `repairing` and `quality_review` replace the stubs. Settings: `critic_llm`, `critic_block_tokens`, `repair_max_attempts` (2).
+  - VALIDATING writes a `quality_report` with scope `validation` per round. A section with an open repairable issue goes to REPAIRING while it has attempts left. A blocking issue only a reviewer can settle marks it `needs_review`.
+  - Section statuses: `drafted` → `repairing` → `drafted` → `validated` / `needs_review`; `attempts` counts repair rounds.
+  - Only ASSEMBLING and RECONCILING are still stubs. With no DOCX yet, a clean job ends COMPLETED_WITH_WARNINGS.
+- **Two design choices made on the live samples (recorded in IMPLEMENTATION_PLAN.md, Phase 10 "As built"):**
+  - **The critic reads each claim once.** After a repair it reads only the claims whose text changed; earlier findings move to the renumbered IDs of unchanged claims. Re-reading the whole section let gpt-4o flag different claims in round 3 (RPAS: C-TGT-6-117/123/137), after the last repair.
+  - **The last repair attempt copies from the source.** The first repair re-words with the reasons; the last copies the flagged passage verbatim, with a note naming the finding. Before this, 14 critic findings were still open on 028-BIS-00493 after 2 rounds, because each LLM repair produced new wording to flag. Meaning wins over house style (§2.1).
+- **Orchestrator / API:**
+  - `MANUALLY_EDITED` can be retried, e.g. from VALIDATING after a reviewer's edit; a slot edit marks its section `drafted`, so the critic reads it again.
+  - New `POST /{job_id}/issues/{issue_id}/resolve` (note required): resolves one issue as a new report version. When the last blocking issue of a HUMAN_REVIEW_REQUIRED job is resolved, the job moves on.
+  - `GET /validation` now returns the job's quality report.
+  - Note: `POST /retry` takes `from_stage` as a **query parameter**. Without it a retry restarts at PARSING and re-drafts everything, including a reviewer's edits.
+- **Inspection:** runs the validation and repair rounds and `quality_review`, as the orchestrator does.
+  - New "Quality gates" check: gaps and high-risk findings are WARN (reviewer); any other open gate is FAIL.
+  - New "Quality" section: the gate table, rounds, open issues, soft scores and high-risk passages.
+  - The LLM check now also lists the critic and repair usage.
+- **Results on the 3 samples** (live, `gpt-4o-poc`; reports refreshed in `documents/reports/` and `documents/reports_gwp/`):
+  - Placement mode: 1 validation round, 0 critic calls, 0 repairs.
+    - 028-BIS-00493 and BI-VQD-10505-S: no open gate (BI-VQD-10505-S Quality gates PASS).
+    - RPAS: the 2 required APPLICABILITY gaps (units, geography) wait for a reviewer.
+  - GWP mode (v3 approved): 3 validation rounds and 2 repair rounds per SOP.
+    - 028-BIS-00493 and BI-VQD-10505-S: no open gate.
+    - RPAS: its 2 gaps, plus 1 high-risk item ("states no obligation; the draft makes it mandatory" on an approval passage).
+    - The critic found real problems the deterministic checks miss: "might be skipped" → "may be omitted"; an added "Refer to the united System SOP"; a dropped "machine learning and AI bots are excluded".
+    - Cost per SOP: critic 6–7 calls, about 9k–13k input and 400–900 output tokens; repair 1 call, about 1.5k input.
+  - Soft scores with the GWP: style compliance 0.40–0.64, passive 33–51%, Flesch 30–38, grade 11.7–13.8. gpt-4o's rewrites meet the guide's 20-word sentences and 10% passive only partly; these are low items, not gates.
+- **Tests:**
+  - `tests/test_v2_quality.py` (16 tests):
+    - the seeded faults (dropped number, weakened prohibition, reordered procedure) are caught, then repaired;
+    - a repair that breaks the text again falls back to the source; repair without an LLM; gaps are never repaired;
+    - callouts, placeholders, unknown slots; style checks (soft, rewritten slots only, the PRES-004 exception);
+    - readability helpers; the risk classifier; critic scoping, capping and failure;
+    - gates: gaps, resolutions, final status, missing section; high-risk escalation;
+    - the stage loop: last attempt verbatim, one repair clears a finding, a source conflict goes to the reviewer;
+    - the API: resolve a gap, retry keeps the resolution, an edit is re-validated and not repaired;
+    - the samples in placement mode need no repair.
+  - `tests/test_v2_quality_live.py` (opt-in `llm`, passed).
+  - Older tests now expect the example job to end HUMAN_REVIEW_REQUIRED, because its required `steps` slot has no source content (`END_STATUS`); `/validation` is no longer a 404.
+  - Full suite: 495 passed, 14 skipped.
+- **Open:**
+  - **RPAS gaps** (APPLICABILITY units, geography) and the high-risk "made mandatory" item need a reviewer in a real job (resolve via the API, or the review UI in Phase 13).
+  - A reviewer who fills a gap slot must cite a source unit; one planned for another slot gives an `unsupported_claim`. The Phase 13 UI needs a way to add reviewer content to a gap.
+  - The critic is generous with medium "meaning_changed" findings on near-synonyms ("dissemination" vs "distribution"). They stay medium items (COMPLETED_WITH_WARNINGS) and are never repaired.
+  - The style scores are far from the guide's targets. Whether the drafter prompt should push harder on STY-005 and STY-021 is a decision for the user.
+  - Calibration of the risk cues and critic severities waits for Phase 14 (approved examples).
+- **Next step:** Phase 11 (anchor-based Word renderer v2), starting from the `SectionDraft`s and the template anchors. Phase 12 then resolves the `{{ref:...}}` tokens and removes accepted gaps on export.
+
+## 2026-10-09: Phase 11 (anchor-based Word renderer): done
+- Phases 9 and 10 were still uncommitted at the start; Phases 9–11 are all in the working tree.
+- **New package `app/services/migration_v2/render/`:**
+  - `renderer.py`: `render_document(template, drafts, source, out, mode=review|final, accepted_gaps, slot_plan, ref_text)` fills a copy of the template's normalized file in place, at each slot's anchor (content control, row controls of a table slot, table cell, bookmark, placeholder).
+    - Content → filled.
+    - Required slot without source content → gap marker "Source content not found. Human review required." (review draft).
+    - Optional slot without content → removed with its instruction (a cell's row, a callout box, a data table, a block).
+    - Optional sections without content are removed. The highlighted "(optional)" leaves a heading whose section has content. The callout legend table goes.
+    - `final` mode removes reviewer-accepted gaps and unwraps the slot content controls. It raises `RenderBlocked` while any gap is unresolved. Phase 12 wires it to the export.
+  - `content.py`: claims → blocks.
+    - Paragraphs keep the anchor's alignment and the template's spacing; multi-line claims get line breaks.
+    - Steps and bullets use real Word numbering. Sub-headings use `Heading n` with the template headings' numbering (6.1, 6.2.1).
+    - Figures come from the source image, scaled to the text width (a placeholder and a warning if the file is missing). Captions use the `Caption` style.
+    - Adjacent claims with a callout kind go into one cloned callout box.
+    - Reference tokens show the source's wording until Phase 12, without repeating words the text already has before the token.
+  - `numbering.py`: bullets reuse the template's bullet definition. Numbered lists use a decimal definition built from the bullet definition's indents (the GP template has no decimal list), with one `w:num` per list that restarts at 1.
+  - `tables.py`:
+    - A table slot fills the template table. The header rows stay; each source row is a copy of the first example row, with cell shading from `fill_hex`; the example rows go.
+    - A source table with more columns than the template, or a template header with placeholders ("[Role 1]"), is written in its own columns. It takes the template table's formatting, widths from its content, and rows that may break across pages.
+    - A header row that only repeats the rows (a source table whose every row was marked as a header) is dropped.
+    - Each further source table in a slot gets its own table. Claim order is kept, so a lead-in line stays before its table. No cell is dropped.
+  - `callouts.py`: callout boxes are deep copies of the palette's prototype tables (fill, icon, widths), kept on one page. Without a prototype, a box is built from the `CalloutStyle`.
+  - `instructions.py`:
+    - Conditional regions are settled first. An inline choice takes the slot plan's choice, else the document type another region of the same SOP settled, else it is removed with a note. A block region is kept (made plain) only when the slot plan has a `RegionChoice` for it.
+    - Then the remaining blue instruction text is removed: blue paragraphs, blue spacer lines, all-blue tables, and blue runs inside black paragraphs.
+    - Headings, the TOC and rendered content are never touched.
+  - `verify.py`, the post-render check (`RenderReport.problems`):
+    - every claim of a filled slot is in the document (table rows cell by cell, figures by their image's hash);
+    - gap markers match the gap slots;
+    - no blue text is left, and no `COND_` controls (no `CC_` controls in final mode);
+    - numbering IDs exist and drawing IDs are unique;
+    - headers and footers are byte-identical to the template's.
+  - Word refreshes the TOC on opening (`w:updateFields`). Drawing IDs are renumbered. A replaced bookmark paragraph's bookmark moves to the new content.
+- **Shared colour classifier** `template/colour.py` (`TextColour`), moved out of `slot_detector.py`, so detection and removal agree on what is blue. Detection behaves as before.
+- **Contracts** (CONTRACTS.md "Rendered document", `examples/render_report.json`):
+  - `render.py`: `RenderReport`, `SlotRender`, `RegionRender`, `RenderMode`, `SlotOutcome`, `RegionOutcome`;
+  - `ArtifactKind.RENDER_REPORT`;
+  - `TableCell.paragraphs`: the Phase 2 exporter now lists a cell's paragraphs when it has several. `text` is unchanged (still joined with spaces), so hashes, checks and goldens are unaffected; the renderer uses `paragraphs` to keep the cell's lines (document history, roles tables).
+- **Stage, API:**
+  - ASSEMBLING (was a stub) renders the review draft. It writes a `docx` artifact (`ArtifactWriter.write_file` / `read_bytes`, sha256 as for JSON), a `render_report` and a `render` event.
+  - A missing template file is a `render_failed` event; the job then ends without a document.
+  - QUALITY_REVIEW and issue resolution count a document only when its render report has no problems (`stages.document_rendered`).
+  - New `GET /{id}/document` (the `.docx`, `?version=`) and `GET /{id}/document/report`. `GET /artifacts/docx` returns the file.
+- **Inspection:** runs ASSEMBLING as the orchestrator does.
+  - New "Word document" check: FAIL on a post-render problem or a slot without an anchor; WARN with the warnings.
+  - New "Word document" section: a link to `docx_v1.docx`, the slot outcomes, the conditional regions and the warnings.
+- **Results on the 3 samples** (live `gpt-4o-poc`, placement mode and GWP v3; reports refreshed in `documents/reports/` and `documents/reports_gwp/`):
+  - Every document opens in Word without repair. No post-render problem; no slot without an anchor.
+  - BI-VQD-10505-S has 10–11 pages, 028-BIS-00493 22, RPAS 21. Icons, header, footer and cover page are kept. The TOC refreshes with the new sub-headings. Word numbers 6.1 and 6.2.1. Figures and captions are in place.
+  - "This SOP:" and "This SOP is applicable:" are applied on BI-VQD-10505-S. They are removed on the two SOPs whose source has no such line (028-BIS-00493, RPAS).
+  - RPAS has 2 gap markers (APPLICABILITY units, geography). In `final` mode with both accepted, their icon rows are gone.
+  - Written in their own columns: the DOCUMENT HISTORY tables of 028-BIS-00493 and RPAS (4 columns including "Expert team"; the template has 3), and both RPAS RACI tables (the template header has "[Role n]" placeholders).
+  - Column warnings for the reviewer: RPAS "Role assigned to:" under the template's "Competence"; "Document-ID" under "Name"; "Definition" under "Description".
+- **Tests:**
+  - `tests/test_v2_renderer.py` (19):
+    - content at each anchor kind (control, row controls, table cell, bookmark, placeholder);
+    - real numbering (one list across a nested bullet); sub-heading, figure and caption; a missing figure file;
+    - the callout clone (fill, icon, kept on one page);
+    - the template table filled with shading; a table in its own columns; claim order; cell lines;
+    - a gap in review mode, final mode blocked, final mode with an accepted gap; an optional slot removed;
+    - conditional regions (choice, kept, removed);
+    - the post-render check catching a missing claim and a missing figure; reference wording;
+    - the ASSEMBLING stage (artifacts, `render_failed`) and the API endpoints;
+    - the 3 samples in placement mode.
+  - `tests/test_word_roundtrip.py`: a rendered document opens in Word (opt-in `word`, passed).
+  - A contract test for `render_report.json`.
+  - Full suite: 516 passed, 15 skipped.
+- **Open:**
+  - **For the user:** an inline choice ("This Directive/SOP/Work Instruction/Guidance:") with no answering line in the SOP is removed. Should it default to the SOP's document type ("SOP")?
+  - **For the user:** the competence table (t:7) is removed unless the slot plan keeps it, and no rule keeps it yet. The golden for BI-VQD-10505-S expects the Competence column to be empty, never invented.
+  - **For the user:** a source table with more columns than the template table (a document history with "Expert team", RACI) is written in its own columns. The alternative is to fit it into the template's columns, which would lose or merge a column.
+  - Bullets inside source table cells come through as plain lines (`TableCell.paragraphs` has no list information).
+  - Word asks "update fields?" when it opens the review draft (`updateFields`). A viewer that does not update fields shows the template's old TOC until the file is opened in Word. Phase 12 can write the TOC entries itself if that matters.
+  - Rows of a filled template table are not wrapped in content controls in the review draft (block and cell controls are kept).
+  - RPAS: the U+FFFD characters in the source file carry into the document; the render report warns about them.
+- **Next step:** Phase 12.
+  - Build the `NumberMap` from the assembled drafts.
+  - Resolve `{{ref:...}}` tokens to Word `REF` fields on bookmarks (the renderer's `ref_text` hook).
+  - Reconcile.
+  - Then the final export at `GET /{id}/export/word`: `render_document(mode=final, accepted_gaps=<resolved missing_slot issues>)`, refused while a gap is open (`RenderBlocked`).
+
+## 2026-10-10: Fixes from the user's review of the Word output: TOC, shared APPLICABILITY passage: done
+- **Problem 1: the table of contents was the template's.** The renderer left the template's cached TOC entries (its own sections, including the removed "distribution of controlled prints", "TEMPLATE DOCUMENT HISTORY", no sub-headings, the template's page numbers) and relied on `w:updateFields`. Word shows the right TOC only after answering Yes to "Update the fields?"; any other viewer, or a No, shows the template's list.
+  - New `render/toc.py`: `rebuild_toc` writes the entries from the rendered headings. The levels come from the field's `\t` or `\o` switch (GP template: Heading 1–3). Each entry has the Word number (`NumberingResolver`), the text, a hyperlink and a `PAGEREF` to a bookmark on the heading (the heading's own bookmark, else a new `_Toc…` one). The TOC field stays, so Word's "Update table" still works.
+  - New `render/pages.py` + `scripts/word_pages.ps1`: page numbers measured by Word's layout. Word opens the rendered file read-only and hidden, reads each bookmark's page and closes without saving, so the XML stays the renderer's (headers stay byte-identical). Then `updateFields` is dropped: no prompt on opening. Setting `render_toc_pages` (`word` default, `off`); without Word, the entries have no page numbers and `updateFields` stays.
+  - 028-BIS-00493: 17 entries (1–9 with 6.1, 6.1.1, 6.1.2, 6.2, 6.2.1–6.2.3, 6.3). The cached page numbers are identical to Word's own `TablesOfContents(1).Update()` on the same file.
+  - The post-render check (`verify.py`) now fails when the TOC does not match the headings or links to a missing bookmark. `RenderReport.toc_entries` and `toc_page_numbers`.
+- **Problem 2: one APPLICABILITY sentence copied whole into roles, units and geography (028-BIS-00493).** The slot planner shares SRC-2-U001 between the 3 slots (`extraction_scope`), as the golden expects. But the placement-mode excerpt call accepted any substring, and gpt-4o returned the whole sentence for each slot. In GWP mode the rewrite only got a "(part: X)" hint and rewrote the whole sentence 3 times.
+  - The drafter now **splits** a shared text passage (both modes; prompt `drafter/4`). One LLM call per passage cuts it into consecutive verbatim pieces, each given to one of its slots. `split_passage` accepts the split only if the pieces, in order, are the whole passage: nothing dropped, added or repeated, only spaces and punctuation between pieces, and every slot gets a piece. Each slot then copies (placement) or rewrites (GWP) only its part.
+  - The part is kept on the claims as `Claim.spans` (`EvidenceSpan`). `restore` uses them, so a repair re-drafts the slot's part, not the passage. The draft checks expect a reference token only in the slot whose part has it. The critic is shown the part, not the whole passage.
+  - When a passage cannot be split cleanly (or there is no LLM), each slot gets it whole, with one note for the reviewer (as before).
+  - 028-BIS-00493 live (gpt-4o-poc), placement: roles "This procedure is binding for BI employees, including temporary employees and contractors" | units "working in the GBS unITed Program, for the GBS Deployments and for the GBS Live Site Organization" | geography "independent of the organizational assignment to a country, site or division." GWP: each part rewritten on its own. No gate opens in either mode; the golden comparison is unchanged.
+- **Tests:** `test_v2_drafter.py` (the excerpt test is replaced: `split_passage` rules, a clean split, a refused split, GWP rewrite of the parts, `restore` keeps the part). `test_v2_renderer.py` (TOC levels, entries = headings with bookmarks, page counter, no Word, stale TOC caught; the 3 samples' TOCs). `tests/conftest.py` turns the Word page count off unless `SOP_RUN_WORD_TESTS=1`. Full suite: 524 passed, 15 skipped.
+- **Open:** the reports in `documents/reports*/` are from 2026-10-09. Re-run `scripts/inspect_sop.py` to refresh them with these fixes. `reports_gwp/028-BIS-00493/docx_v1.docx` was open in Word, so it was not overwritten.
+
+## 2026-10-10: Figures and narrative in a table-only section (DEFINITIONS): done
+- **Problem:** Image 1 and the paragraph before it ("The GBS Solution provided by the GBS unITed Program operates cross functional…") were missing from 028-BIS-00493's DEFINITIONS. The section's template slots are both tables. The rules left the figure and caption in no slot ([CHECK]), and put the long paragraph beside the terms table ([CHECK]). The slot planner's LLM then answered "fits no slot" ("figures and captions should not be placed in slots"; the answer varied between runs). A passage in no slot was only a medium note, so the job completed and nothing was in the document. The golden file's `figures` expectations were never checked.
+- **User decision:** keep such content in DEFINITIONS, below the tables.
+- **Done:**
+  - Slot planner: in a table-only section, a run of passages holding a figure, a caption or long text (more than 300 chars, not a table intro) goes into the section's last table slot as `SlotMapping.below_unit_ids`. A line that introduces the next table stays with it. These lines show `[BELOW TABLES]` to the LLM and cannot be changed. The LLM can no longer take a passage the rules placed out of every slot (prompt `slot_planner/3`).
+  - Drafter: below passages sort after the rows (`Drafter.position`, also in `restore` for repairs). The validator's order check knows about them. The renderer needs no change: text claims after the rows are written after the table.
+  - Gates: each passage still in no slot is a high `unaccounted_source` issue (`[unplaced]`, `gates.unplaced_issues`). It waits for the reviewer like a gap: HUMAN_REVIEW_REQUIRED until resolved.
+  - Inspection: the golden `figures` are now checked (`draft_figure_problems`: the caption claim and its figure in the draft).
+- **Result** (028-BIS-00493, live gpt-4o-poc, both modes): no unplaced passage. After the abbreviations table come the paragraph, the image and "Image 1: Dimensions of the GBS unITed Program", before chapter 4. No gate open. Placement mode: Slot plan, Draft and Quality gates are now PASS (were WARN).
+- **Tests:** slot planner (below-the-tables placement, an intro line stays, the LLM cannot drop or move them); drafter (rows first, order check, repair rebuild); gates (an unplaced passage blocks, awaits the reviewer); golden figures; sample render (Image 1 after the abbreviations table). Full suite: 529 passed, 15 skipped.
+
+## 2026-10-10: Phase 12 (assembly, cross-references, reconciliation, audit, export): done
+- **Order of operations** (new status `RENDERING`): VALIDATING (⇄ REPAIRING) → ASSEMBLING → RECONCILING → RENDERING → QUALITY_REVIEW.
+- **Assembly** (`app/services/migration_v2/assembly/`):
+  - `numbers.py` builds the `NumberMap` exactly as the renderer will number things. Chapters present: an optional chapter with no content is removed and the ones after it move up. Sub-headings: chapter number plus `list_level` depth, a skipped level counting from 1 as in Word. Referenced passages: their holder's number, plus the "No." cell or step number.
+  - A source section with no heading of its own (merged, or split) gets its holder's number, marked `exact: false`.
+  - `xref_resolver.py` keeps the source's phrase and replaces only its numbers ("chapter 6.12.1" → "chapter 6.13.1", "Chapter 8, no. 17" keeps 17). Status `resolved` / `merged` (medium issue) / `unresolved` (high `broken_cross_reference`). It also checks relative phrases ("described above") against the passage just before or after in the source.
+  - `AssembledDocument` and `NumberMap` artifacts; RENDERING and RECONCILING reuse them while the drafts are unchanged, and make them again after an edit or a patch.
+- **Renderer:** chapter and sub-heading bookmarks (`_Ref_<id>`); each new number is a Word `REF \w \h` field whose cached value is the computed number (`xml.ref_field`, `add_runs`).
+  - The post-render check compares Word's numbering of every bookmarked heading (`NumberingResolver`) with the map, and finds REF fields without a bookmark.
+  - A template whose headings Word does not number gets plain numbers and a warning (`headings_numbered`).
+  - On the 3 samples, Word's own field update gives the same values as the cached ones (checked through COM: 8/7/6.1.2.1; RPAS 5, 6.13.1, 6.9, 6.5; BI-VQD-10505-S 6.2).
+- **Reconciliation** (`quality/reconcile.py`, prompt `reconcile/1`):
+  - Deterministic checks: abbreviations (not defined, spelled out late, spelled out differently from the table; one summary item for the undefined ones, and only when the document has an abbreviations table); roles not in the roles table (one summary item); duplicate heading numbers (gate).
+  - One LLM call, by default for GWP jobs (`reconcile_llm: gwp`), reports contradictions, duplicates and terms named two ways. A patch is applied only to a reworded claim (judged as the critic does, not by `rule_ids_applied`), only with the same reference tokens, and only if the whole document still validates with no new blocking issue on that claim. Patched sections are a new draft version with `origin: reconcile`.
+  - RECONCILING writes the next `validation` round (validation, carried critic findings, reference and reconciliation issues).
+- **Audit** (`audit.py`): the orchestrator and the inspection runner wrap the chain factory per stage. Every LLM call (and every failed attempt) is an `llm_call` event with task, prompt version, model, tokens, latency, retry, status, and the unit and claim IDs supplied. Reviewer edits: `slot_edited` (claim-by-claim before/after) and `plan_edited`, with the reviewer as actor.
+- **Export** (`export.py`, API):
+  - `GET /{id}/export/word` is refused (409 `EXPORT_BLOCKED`, `GAPS_UNRESOLVED`, `EXPORT_CHECK_FAILED`, `RENDER_FAILED`) until the job completed. It renders `final` with accepted gaps removed (re-assembled: numbers can change), saves the final artifacts (`scope: final`) and `traceability`, writes `gap_removed` events and an `export` event, and marks the SOP record (`migrated_path`, `migrated_job_id`, `migrated_at`). Asking again with nothing changed returns the same file.
+  - `GET /{id}/traceability?format=json|csv` builds the mapping live from the latest drafts.
+- **Inspection:** runs the new stages, audited. New "Cross-references" check and "Numbers and cross-references" section. The LLM check now comes from the `llm_call` events. The golden comparison checks `figures` and `cross_references` (the reference lands on the expected heading and entry).
+- **End to end** (the phase's done-check, live gpt-4o-poc, real orchestrator, auto mode):
+  - 028-BIS-00493 with GWP v3: COMPLETED_WITH_WARNINGS. 16/16 references resolved, 1 reconciliation patch applied (then validated and re-assembled), final export written with Word-measured TOC pages. 17 LLM calls, each with every audit field.
+  - RPAS: HUMAN_REVIEW_REQUIRED (the two APPLICABILITY gaps, plus "Chapter 5.2" → "Chapter 5" escalated as high-risk). The export is refused with those three reasons.
+- **Tests:** `tests/test_v2_assembly.py` (19): numbers, references, show(), merged/unresolved, relative, REF runs, unnumbered templates, reconciliation checks and patches, audit, export refusal/success/reuse, traceability, the edit diff, the reconciling stage with a patch.
+  - Updated: job stage sequence (`RENDERING`); the example SOP's dangling "see Section 5.1" is now a gate the tests resolve; the renderer stage test; the sample render test checks the REF fields.
+  - `tests/conftest.py`: no Word unless `SOP_RUN_WORD_TESTS=1`.
+  - Full suite: 547 passed, 15 skipped.
+- **Open:**
+  - The two decisions in USER_TASKS 5j.
+  - The example template has no `.docx`, so the API export test covers refusal and edits; the success path is tested on the service with the synthetic template.
+  - `documents/reports*/` are from before Phase 12: re-run `scripts/inspect_sop.py` to refresh them.
+- **Next step:** Phase 13 (review UI), against the endpoints above, or Phase 14 (evaluation harness).

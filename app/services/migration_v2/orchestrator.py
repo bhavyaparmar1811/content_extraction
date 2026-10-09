@@ -4,7 +4,7 @@ The happy path:
 
     PENDING → PARSING → PLANNING_SECTIONS → [SECTION_PLAN_REVIEW_PENDING] → PLANNING_SLOTS
       → [SLOT_PLAN_REVIEW_PENDING] → DRAFTING → VALIDATING (⇄ REPAIRING) → ASSEMBLING
-      → RECONCILING → QUALITY_REVIEW → COMPLETED / COMPLETED_WITH_WARNINGS / HUMAN_REVIEW_REQUIRED
+      → RECONCILING → RENDERING → QUALITY_REVIEW → COMPLETED / COMPLETED_WITH_WARNINGS / HUMAN_REVIEW_REQUIRED
 
 The review gates (in brackets) apply only in ``mode=review``. All state lives
 in the ``MigrationStore``, so nothing is lost on a restart: ``resume_incomplete``
@@ -39,6 +39,7 @@ from app.schemas.v2 import (
 from app.stores.migration_store import MigrationStore
 
 from .artifacts import ArtifactWriter
+from .audit import audited, write_calls
 from .inputs import InputResolver, ResolvedInputs
 from .planning.section_validator import validate_section_plan
 from .planning.slot_validator import validate_slot_plan
@@ -54,7 +55,8 @@ NEXT_STATUS: dict[JobStatus, JobStatus] = {
     JobStatus.VALIDATING: JobStatus.ASSEMBLING,
     JobStatus.REPAIRING: JobStatus.VALIDATING,
     JobStatus.ASSEMBLING: JobStatus.RECONCILING,
-    JobStatus.RECONCILING: JobStatus.QUALITY_REVIEW,
+    JobStatus.RECONCILING: JobStatus.RENDERING,
+    JobStatus.RENDERING: JobStatus.QUALITY_REVIEW,
     JobStatus.QUALITY_REVIEW: JobStatus.COMPLETED,
 }
 
@@ -77,6 +79,7 @@ WORK_STAGES: tuple[JobStatus, ...] = (
     JobStatus.REPAIRING,
     JobStatus.ASSEMBLING,
     JobStatus.RECONCILING,
+    JobStatus.RENDERING,
     JobStatus.QUALITY_REVIEW,
 )
 WAITING_FOR_HUMAN = frozenset(
@@ -93,11 +96,12 @@ STAGE_REQUIRES: dict[JobStatus, tuple[ArtifactKind, ...]] = {
     JobStatus.REPAIRING: (ArtifactKind.SLOT_PLAN,),
     JobStatus.ASSEMBLING: (ArtifactKind.SLOT_PLAN,),
     JobStatus.RECONCILING: (ArtifactKind.SLOT_PLAN,),
+    JobStatus.RENDERING: (ArtifactKind.SLOT_PLAN,),
     JobStatus.QUALITY_REVIEW: (ArtifactKind.SLOT_PLAN,),
 }
 RETRYABLE_FROM = frozenset(
     {JobStatus.FAILED_TECHNICAL, JobStatus.CANCELLED, JobStatus.HUMAN_REVIEW_REQUIRED,
-     JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_WARNINGS}
+     JobStatus.COMPLETED, JobStatus.COMPLETED_WITH_WARNINGS, JobStatus.MANUALLY_EDITED}  # edited drafts: re-validate
 )
 
 
@@ -313,15 +317,18 @@ class Orchestrator:
                     return
                 ctx = StageContext(
                     job=job, store=self.store, artifacts=self.artifacts, inputs=self.inputs,
-                    settings=self.settings, rate_limiter=self.rate_limiter, chain_factory=self.chain_factory,
+                    settings=self.settings, rate_limiter=self.rate_limiter, chain_factory=audited(self.chain_factory),
                 )
                 self.store.add_event(job_id, "stage_started", SYSTEM_ACTOR, {"stage": status.value})
                 try:
                     override = await stage(ctx)
+                    write_calls(self.store, job_id, SYSTEM_ACTOR, ctx.chain_factory, status.value)
                 except asyncio.CancelledError:
+                    write_calls(self.store, job_id, SYSTEM_ACTOR, ctx.chain_factory, status.value)
                     self.store.add_event(job_id, "interrupted", SYSTEM_ACTOR, {"stage": status.value})
                     raise
                 except Exception as exc:  # technical failure: record it and stop
+                    write_calls(self.store, job_id, SYSTEM_ACTOR, ctx.chain_factory, status.value)
                     logger.exception(f"Migration {job_id} failed in {status.value}")
                     message = getattr(exc, "message", None) or str(exc) or type(exc).__name__
                     self.store.update_job(job_id, error=message, failed_stage=status.value)

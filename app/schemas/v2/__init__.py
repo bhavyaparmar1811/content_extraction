@@ -1,7 +1,7 @@
 """v2 migration contracts. See docs/migration_v2/CONTRACTS.md."""
 
 from .common import SCHEMA_VERSION, CalloutKind, ContentType, HexColor, Severity, V2Model
-from .draft import Claim, DraftOrigin, EvidenceSpan, SectionDraft, SlotDraft
+from .draft import Claim, ClaimKind, DraftOrigin, EvidenceSpan, SectionDraft, SlotDraft
 from .gwp import (
     DroppedCandidate,
     GwpExtractionReport,
@@ -49,18 +49,25 @@ from .quality import (
     ProtectedObligation,
     ProtectedValue,
     QualityReport,
+    RiskTag,
     ValidationIssue,
 )
 from .refs import (
     REF_TOKEN_PATTERN,
+    AssembledDocument,
     CrossReference,
+    NumberKind,
     NumberMap,
     NumberMapEntry,
     RefKind,
     RefResolution,
+    RefStatus,
+    ResolvedRef,
     find_ref_tokens,
     make_ref_token,
 )
+from .trace import TraceRow, Traceability
+from .render import RegionOutcome, RegionRender, RenderMode, RenderReport, SlotOutcome, SlotRender
 from .source import (
     AssetKind,
     SourceAsset,

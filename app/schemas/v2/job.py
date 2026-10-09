@@ -25,6 +25,7 @@ class JobStatus(str, Enum):
     REPAIRING = "REPAIRING"
     ASSEMBLING = "ASSEMBLING"
     RECONCILING = "RECONCILING"
+    RENDERING = "RENDERING"
     QUALITY_REVIEW = "QUALITY_REVIEW"
     HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
     COMPLETED = "COMPLETED"
@@ -73,6 +74,7 @@ class ArtifactKind(str, Enum):
     NUMBER_MAP = "number_map"
     QUALITY_REPORT = "quality_report"
     DOCX = "docx"
+    RENDER_REPORT = "render_report"
     TRACEABILITY = "traceability"
 
 

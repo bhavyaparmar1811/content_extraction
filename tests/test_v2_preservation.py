@@ -153,8 +153,26 @@ DISALLOWED = [
 
 @pytest.mark.parametrize("source, claims", ALLOWED)
 def test_allowed_rewrites_raise_nothing(source, claims):
-    issues = _check(source, *claims)
+    issues = [i for i in _check(source, *claims) if "makes it mandatory" not in i.message]
     assert issues == [], [i.message for i in issues]
+
+
+def test_a_plain_statement_made_mandatory_is_listed_for_review():
+    issues = _check("The Process Owner submits the deviation within five business days.",
+                    "The Process Owner must submit the deviation within five business days.")
+    assert [(i.severity.value, i.gate) for i in issues] == [("medium", None)]
+    assert "makes it mandatory" in issues[0].message
+    assert _check("QA must not close the deviation.", "QA must never close the deviation.") == []  # stated, not added
+
+
+def test_a_quoted_name_must_survive():
+    source = "The RPAS run on the platform. Refer to “UiPath Development Guideline”."
+    lost = _check(source, "The RPAS run on the platform.")
+    assert any("quoted name 'UiPath Development Guideline'" in i.message for i in lost)
+    assert _check(source, "The RPAS run on the platform. See the “UiPath Development Guideline”.") == []
+    garbled = "Global RPAS�s start with �BI�. Refer to �UiPath Development Guideline�."
+    assert [i.message for i in _check(garbled, "Global RPAS start with BI.")] == [
+        "[PRES-006] quoted name 'UiPath Development Guideline' from SRC-6-U001 is missing from the claims that cite it."]
 
 
 @pytest.mark.parametrize("source, claims, rules, gate", DISALLOWED)
