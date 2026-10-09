@@ -79,6 +79,9 @@ class TableCell(V2Model):
     col_span: int = 1
     is_header: bool = False
     fill_hex: Optional[HexColor] = Field(default=None, description="Meaningful cell shading; header fills are dropped")
+    paragraphs: list[str] = Field(
+        default_factory=list, description="The cell's paragraphs when it has more than one; ``text`` joins them with spaces"
+    )
 
 
 class TableRef(V2Model):

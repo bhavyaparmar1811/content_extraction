@@ -1,0 +1,16 @@
+{
+  "job_id": "MIG-20261002-1A2B3C4D",
+  "version": 1,
+  "section_order": ["TGT-1", "TGT-2", "TGT-3", "TGT-4", "TGT-10"],
+  "sections_removed": ["TGT-9"],
+  "draft_versions": {"TGT-1": 1, "TGT-2": 1, "TGT-3": 2, "TGT-4": 1, "TGT-10": 1},
+  "refs": [
+    {"claim_id": "C-TGT-3-003", "target": "SRC-5.1", "source_phrase": "see Section 5.1", "text": "see Section 4.1",
+     "number": "4.1", "number_at": 12, "bookmark": "_Ref_SRC_5_1", "status": "resolved"},
+    {"claim_id": "C-TGT-3-004", "target": "SRC-5.3", "source_phrase": "see Section 5.3", "text": "see Section 4.1",
+     "number": "4.1", "number_at": 12, "bookmark": "_Ref_SRC_5_1", "status": "merged",
+     "note": "5.3 has no heading of its own in the new document; it is now part of 4.1"},
+    {"claim_id": "C-TGT-4-007", "target": "SRC-8", "source_phrase": "see Chapter 8", "text": "see Chapter 8",
+     "status": "unresolved", "note": "the target is not in the new document"}
+  ]
+}

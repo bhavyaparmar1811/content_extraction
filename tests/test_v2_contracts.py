@@ -25,8 +25,11 @@ from app.schemas.v2 import (
     MappingType,
     MigrationAction,
     MigrationJob,
+    AssembledDocument,
     NumberMap,
+    Traceability,
     QualityReport,
+    RenderReport,
     ReadinessStatus,
     RuleCategory,
     SectionDraft,
@@ -57,6 +60,9 @@ EXAMPLE_MODELS = {
     "quality_report.json": QualityReport,
     "migration_job.json": MigrationJob,
     "number_map.json": NumberMap,
+    "render_report.json": RenderReport,
+    "assembled_draft.json": AssembledDocument,
+    "traceability.json": Traceability,
 }
 
 
@@ -273,6 +279,14 @@ def test_number_map_lookup():
     numbers = NumberMap.model_validate(_load("number_map.json"))
     assert numbers.lookup("SRC-5.1").target_number == "4.1"
     assert numbers.lookup("SRC-9") is None
+    assert numbers.lookup("SRC-4.2-U002").item_number == "2" and not numbers.lookup("SRC-5.3").exact
+
+
+def test_assembled_document_ref_lookup():
+    assembled = AssembledDocument.model_validate(_load("assembled_draft.json"))
+    ref = assembled.ref("C-TGT-3-003", "SRC-5.1")
+    assert ref.text[ref.number_at:].startswith(ref.number) and ref.status.value == "resolved"
+    assert assembled.ref("C-TGT-3-003", "SRC-9") is None
 
 
 # ── Quality and job ────────────────────────────────────────────────────
@@ -294,3 +308,10 @@ def test_job_latest_artifact_and_terminal_status():
 
     job.status = JobStatus.COMPLETED
     assert job.is_terminal
+
+
+def test_render_report_ok_and_slot_lookup():
+    report = RenderReport.model_validate(_load("render_report.json"))
+    assert report.ok and report.slot("TGT-2-GEOGRAPHY").outcome.value == "gap_marker"
+    assert report.slot("TGT-X") is None
+    assert not report.model_copy(update={"problems": ["a claim is missing"]}).ok

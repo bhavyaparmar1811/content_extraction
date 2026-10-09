@@ -62,10 +62,10 @@ Each new phase adds its output and checks to the report.
 | 6 | Protected-fact registry and deterministic preservation checks | 2 | M |
 | 7 | Section planner and section-plan validation | 2, 3, 5 | M |
 | 8 | Slot planner and slot-plan validation (done 2026-10-08) | 7 | M |
-| 9 ★ | GWP drafter (claim-level evidence, bounded memory, batching) | 4, 6, 8 | L |
-| 10 | Validation, semantic critic, targeted repair, quality gates | 6, 9 | M |
-| 11 ★ | Anchor-based Word renderer v2 | 3, 9 | L |
-| 12 | Document assembly, cross-reference resolution, reconciliation, audit and export | 10, 11 | M |
+| 9 ★ | GWP drafter (claim-level evidence, bounded memory, batching) (done 2026-10-08) | 4, 6, 8 | L |
+| 10 | Validation, semantic critic, targeted repair, quality gates (done 2026-10-08) | 6, 9 | M |
+| 11 ★ | Anchor-based Word renderer v2 (done 2026-10-09) | 3, 9 | L |
+| 12 | Document assembly, cross-reference resolution, reconciliation, audit and export (done 2026-10-10) | 10, 11 | M |
 | 13 ★ | Frontend: migration review UI | 5, 7, 8, 10 | L |
 | 14 | Evaluation harness, calibration and cutover | all | M |
 
@@ -375,6 +375,11 @@ It does no style rewriting: no voice, wording or sentence-length changes, and no
 
 **Done when:** seeded faults (dropped number, weakened modality, reordered step) are caught and repaired, or escalated.
 
+**As built (2026-10-08):**
+- The critic reads only claims a GWP rewrite reworded (placement mode costs nothing), and after a repair only the claims whose text changed; its findings on unchanged claims carry over. Re-reading a whole section let gpt-4o flag different claims each round.
+- A section's last repair attempt copies the flagged passages from the source instead of asking the LLM again (meaning before style, §2.1); a note lists them. Gaps, source conflicts, wrong-slot findings and reviewer-edited sections are never repaired.
+- High-risk content (§21) comes from a deterministic classifier (`quality/risk.py`); an open medium-or-worse finding on it blocks completion until a reviewer resolves it. Resolving a required-slot gap accepts it as N/A.
+
 ## Phase 11 ★: Anchor-based Word renderer v2
 
 **Goal:** Level 4. Insert content at exact anchors in a copy of the normalized template.
@@ -411,6 +416,16 @@ It does no style rewriting: no voice, wording or sentence-length changes, and no
 - confirm a gap renders.
 
 **Done when:** the sample migration produces a `.docx` that a human judges layout-correct.
+
+**As built (2026-10-09):**
+- `render/` (`renderer.py`, `content.py`, `tables.py`, `callouts.py`, `numbering.py`, `instructions.py`, `verify.py`). ASSEMBLING renders the review draft (`docx` and `render_report` artifacts); Phase 12 adds the number map before it. `docx_styler.py`, `table_migrator.py` and `toc_builder.py` were not reused: their builders work on v1 schemas and append-then-move; the renderer writes WordprocessingML at the anchor.
+- Blue instruction text is removed with the same colour classifier as slot detection (`template/colour.py`, moved out of `slot_detector.py`). Headings are never removed, whatever their style colour.
+- Lists: bullets reuse the template's bullet definition; numbered lists get a decimal definition derived from its indents (the GP template has none) and one `w:num` per list that restarts at 1. Sub-headings use `Heading n` with the template headings' numbering (6.1, 6.2.1).
+- A source table fills the template table by position when it has no more columns than the template (a column whose headers share no word is a warning); otherwise, or when the template header has placeholders ("[Role 1]"), it is written in its own columns with the template table's formatting, widths from its content, and rows that may break across pages. Each further source table in a slot gets its own table. No cell is dropped.
+- Cells keep their paragraphs: `TableCell.paragraphs` (Phase 2 exporter) lists them when there are several.
+- Conditional regions: an inline choice without a source line of its own takes the document type another region settled; with none it is removed (warning). A block region is kept only when the slot plan has a `RegionChoice` for it.
+- Word refreshes the table of contents on opening (`w:updateFields`). Drawing IDs are renumbered. A replaced bookmark paragraph's bookmark moves to the new content.
+- The post-render check (`verify.py`) writes `RenderReport.problems`; a job whose document has a problem cannot end COMPLETED.
 
 ## Phase 12: Document assembly, reconciliation, audit and export
 

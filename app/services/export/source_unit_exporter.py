@@ -374,9 +374,11 @@ class SourceUnitExporter:
                     (icons if cls._is_icon_size(m) or getattr(m, "node_type", "") == "icon" else figures).append(m)
                 fill = cell.shading_hex
                 keep_fill = fill and not uniform_grey and not getattr(row, "is_header", False) and not _is_grey(fill)
+                lines = [line for line in (_norm(t) for t in text.split("\n")) if line]
                 cells.append(TableCell(
                     col=cell.col_index, text=_norm(text), row_span=cell.row_span, col_span=cell.col_span,
                     is_header=row in rows[:header_count], fill_hex=fill if keep_fill else None,
+                    paragraphs=lines if len(lines) > 1 else [],
                 ))
             row_text = " | ".join(c.text for c in cells if c.text)
             if row_text:

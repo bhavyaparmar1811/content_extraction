@@ -71,3 +71,20 @@ def test_synthetic_template_survives_word(tmp_path):
 @pytest.mark.skipif(not (SAMPLE.exists() and SAMPLE_CONFIG.exists()), reason="sample template not available")
 def test_sample_template_survives_word(tmp_path):
     _check_round_trip(SAMPLE, load_config(SAMPLE_CONFIG), tmp_path / "out")
+
+
+def test_rendered_document_opens_in_word(tmp_path):
+    """Phase 11: the renderer's output (lists, callout clones, tables, figures, gap markers) opens without repair."""
+    from test_v2_renderer import scenario
+
+    from app.services.migration_v2.render import render_document
+
+    source = _template(tmp_path / "template.docx", tmp_path)
+    config = _decide_all(build_template_model(source, "tpl").detection,
+                         {"inline_instruction": "conditional", "instruction_table": "conditional"})
+    model = normalize_and_save(source, "tpl", 1, tmp_path / "out", config).build.model
+    sop, drafts, plan = scenario(tmp_path, gap_geography=True)
+    rendered = tmp_path / "rendered.docx"
+    assert render_document(model, drafts, sop, rendered, job_id="J", slot_plan=plan).problems == []
+    stats = _word_resave(rendered, tmp_path / "rendered_word.docx")
+    assert stats.startswith("pages=")

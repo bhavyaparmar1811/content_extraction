@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Optional
 
 from docx import Document
-from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml.ns import qn
 
 from app.schemas.v2 import (
@@ -52,7 +51,6 @@ from app.schemas.v2 import (
     TemplateModel,
 )
 from app.services.parser.ooxml import NumberingResolver, iter_body_blocks
-from app.services.parser.template_parser import TemplateDocxParser
 
 from .callout_palette import (
     PaletteResult,
@@ -63,6 +61,7 @@ from .callout_palette import (
     palette_from_document,
     style_name,
 )
+from .colour import TextColour
 from .overrides import RegionDecision, TemplateConfig
 
 TAG_PREFIX = "CC_"
@@ -226,7 +225,7 @@ class _Detector:
         self.issues: list[str] = []
         self._section: Optional[TargetSection] = None
         self._pending = _Pending()
-        self._colour_cache: dict[tuple[str, str], Optional[str]] = {}
+        self.colour = TextColour(doc)
         self._used_tags: set[str] = set()
 
     # ── Walk ───────────────────────────────────────────────────────────
@@ -312,7 +311,7 @@ class _Detector:
             return  # cover sheet and general rules (v1 global rules), or empty
         region_id = f"p:{paragraph_index}"
         bookmark = _slot_bookmark(p)
-        colour = self._colour_class(p)
+        colour = self.colour.classify(p)
 
         if colour == "mixed":
             decision = self._ambiguous(region_id, "inline_instruction", text, RegionDecision.FIXED)
@@ -396,7 +395,7 @@ class _Detector:
             return
 
         texts = [t for t in (block_text(tc) for r in rows for tc in _cells(r)) if t]
-        if texts and all(self._colour_class(tc) in ("blue", None) for r in rows for tc in _cells(r)):
+        if texts and all(self.colour.classify(tc) in ("blue", None) for r in rows for tc in _cells(r)):
             decision = self._ambiguous(region_id, "instruction_table", " | ".join(texts), RegionDecision.INSTRUCTION)
             if decision == RegionDecision.INSTRUCTION:
                 self._pending.texts.append(" | ".join(texts))
@@ -554,52 +553,6 @@ class _Detector:
         ))
         return decision
 
-    # ── Colour ─────────────────────────────────────────────────────────
-
-    def _colour_class(self, el) -> Optional[str]:
-        """"blue", "plain" or "mixed" by the text runs of *el*; None if it has no text."""
-        blue = plain = False
-        for p in ([el] if el.tag == qn("w:p") else el.iter(qn("w:p"))):
-            p_style = _style_id(p, "pPr", "pStyle")
-            for r in p.iter(qn("w:r")):
-                text = "".join(t.text or "" for t in r.iter(qn("w:t")))
-                if not text.strip():
-                    continue
-                if self._run_is_blue(r, p_style):
-                    blue = True
-                else:
-                    plain = True
-        if blue and plain:
-            return "mixed"
-        return "blue" if blue else ("plain" if plain else None)
-
-    def _run_is_blue(self, r, p_style: Optional[str]) -> bool:
-        colour = r.find(f"{qn('w:rPr')}/{qn('w:color')}")
-        value = colour.get(qn("w:val")) if colour is not None else None
-        if value is None:
-            value = self._style_colour(_style_id(r, "rPr", "rStyle"), WD_STYLE_TYPE.CHARACTER)
-        if value is None:
-            value = self._style_colour(p_style, WD_STYLE_TYPE.PARAGRAPH)
-        return bool(value) and value.lower() != "auto" and TemplateDocxParser.is_blue_hex(value)
-
-    def _style_colour(self, style_id: Optional[str], style_type) -> Optional[str]:
-        if not style_id:
-            return None
-        cache_key = (style_id, str(style_type))
-        if cache_key not in self._colour_cache:
-            colour = None
-            try:
-                style = self.doc.styles.get_by_id(style_id, style_type)
-                while style is not None and colour is None:
-                    rgb = style.font.color.rgb if style.font.color is not None and style.font.color.type else None
-                    colour = str(rgb) if rgb is not None else None
-                    style = style.base_style
-            except Exception:
-                colour = None
-            self._colour_cache[cache_key] = colour
-        return self._colour_cache[cache_key]
-
-
 # ── XML helpers ────────────────────────────────────────────────────────
 
 def _rows(tbl) -> list:
@@ -624,7 +577,7 @@ def _first_data_row(rows, detector: _Detector) -> Optional[int]:
     """First row after the header: header rows are row 0 and black rows of bracket placeholders."""
     for ri in range(1, len(rows)):
         text = block_text(rows[ri])
-        if detector._colour_class(rows[ri]) != "blue" and re.search(r"\[[^\]]+\]", text) and not _PLACEHOLDER.search(text):
+        if detector.colour.classify(rows[ri]) != "blue" and re.search(r"\[[^\]]+\]", text) and not _PLACEHOLDER.search(text):
             continue
         return ri
     return None
@@ -688,10 +641,6 @@ def _slot_bookmark(p) -> Optional[str]:
             return name
     return None
 
-
-def _style_id(el, pr: str, tag: str) -> Optional[str]:
-    node = el.find(f"{qn('w:' + pr)}/{qn('w:' + tag)}")
-    return node.get(qn("w:val")) if node is not None else None
 
 
 # ── Names ──────────────────────────────────────────────────────────────

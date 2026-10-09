@@ -1,7 +1,17 @@
 {
+  "job_id": "MIG-20261002-1A2B3C4D",
+  "version": 1,
   "entries": [
-    {"source_id": "SRC-4.2", "target_section_id": "TGT-3", "target_number": "3", "bookmark": "_Ref_TGT_3"},
-    {"source_id": "SRC-5.1", "target_section_id": "TGT-4", "target_number": "4.1", "bookmark": "_Ref_TGT_4_1"},
-    {"source_id": "SRC-4.2-U002", "target_section_id": "TGT-3", "target_number": "step 2", "bookmark": "_Ref_C_TGT_3_002"}
-  ]
+    {"source_id": "TGT-3", "target_section_id": "TGT-3", "target_number": "3", "bookmark": "_Ref_TGT_3", "kind": "section"},
+    {"source_id": "SRC-4.2", "target_section_id": "TGT-3", "target_number": "3", "bookmark": "_Ref_TGT_3", "kind": "section"},
+    {"source_id": "TGT-4", "target_section_id": "TGT-4", "target_number": "4", "bookmark": "_Ref_TGT_4", "kind": "section"},
+    {"source_id": "SRC-5.1", "target_section_id": "TGT-4", "target_number": "4.1", "bookmark": "_Ref_SRC_5_1", "kind": "heading",
+     "claim_id": "C-TGT-4-003"},
+    {"source_id": "SRC-4.2-U002", "target_section_id": "TGT-3", "target_number": "3", "bookmark": "_Ref_TGT_3", "kind": "unit",
+     "claim_id": "C-TGT-3-002", "item_number": "2"},
+    {"source_id": "SRC-5.3", "target_section_id": "TGT-4", "target_number": "4.1", "bookmark": "_Ref_SRC_5_1", "kind": "heading",
+     "claim_id": "C-TGT-4-003", "exact": false,
+     "note": "5.3 has no heading of its own in the new document; it is now part of 4.1"}
+  ],
+  "sections_removed": ["TGT-9"]
 }

@@ -55,6 +55,7 @@ def test_inspection_runs_the_stages_and_checks(inspected):
     # The synthetic template has undecided regions: a real job would refuse it, and the report says so.
     assert checks["Template"].status == FAIL and any("decide" in d for d in checks["Template"].details)
     assert checks["Golden comparison"].status == "info"
+    assert insp.final_status in ("HUMAN_REVIEW_REQUIRED", "COMPLETED_WITH_WARNINGS") and "Quality gates" in checks
     assert overall(insp.checks) == FAIL
     keys = {t.section_id: t.key for t in insp.template.model.sections}
     placed = {keys[m.target_section_id]: m.source_section_ids for m in insp.plan.mappings if m.target_section_id}
@@ -111,4 +112,22 @@ def test_samples_pass_inspection(tmp_path):
         assert statuses["Template"] == PASS and statuses["Protected facts"] == PASS, sop.name
         assert statuses["Golden comparison"] == PASS, (sop.name, insp.golden_problems, insp.missing_preserve)
         assert statuses["Section plan"] in (PASS, "warn"), sop.name
-        assert "<html" in render(insp)
+        assert statuses["Quality gates"] in (PASS, "warn"), (sop.name, insp.quality.open_gate_issues)  # only gaps may wait
+        html = render(insp)
+        assert "<html" in html and 'id="quality"' in html
+
+
+def test_golden_figures_must_be_drafted():
+    from app.schemas.v2 import Claim, ClaimKind, SectionDraft, SlotDraft
+    from app.services.migration_v2.inspection.golden import draft_figure_problems
+
+    golden = {"figures": [{"caption_contains": "Image 1: Dimensions", "section": "DEFINITIONS"}]}
+
+    def drafts(*claims):
+        return [SectionDraft(target_section_id="TGT-3", version=1, slots=[SlotDraft(slot_id="S", claims=list(claims))])]
+
+    figure = Claim(claim_id="C1", text="[Figure]", kind=ClaimKind.FIGURE, source_unit_ids=["U9"])
+    caption = Claim(claim_id="C2", text="Image 1: Dimensions of the program", kind=ClaimKind.CAPTION, source_unit_ids=["U10"])
+    assert draft_figure_problems(drafts(figure, caption), golden) == []
+    assert "not in the draft" in draft_figure_problems(drafts(), golden)[0]
+    assert "not the image" in draft_figure_problems(drafts(caption), golden)[0]

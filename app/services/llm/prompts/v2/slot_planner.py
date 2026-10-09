@@ -5,7 +5,7 @@ into a template slot. The model checks the doubtful placements, proposes callout
 boxes from the template's palette, and returns corrections only.
 """
 
-PROMPT_VERSION = "slot_planner/2"
+PROMPT_VERSION = "slot_planner/3"
 
 SLOT_PLANNER_SYSTEM_PROMPT = """You review where the passages of a source procedure document (SOP) go inside the sections of a new template.
 
@@ -16,7 +16,8 @@ more slots from cue words, table headers and icon rows. Each passage line shows 
 Your tasks:
 1. Check the lines marked [CHECK] and correct placements that are wrong. A passage may feed several slots of its
    section when it states several things (e.g. one sentence naming the roles, the business units and the geography).
-   A passage that fits no slot of its section: give it no slots (it goes to the reviewer).
+   Never take a passage out of every slot: nothing may be dropped. If no slot fits it, leave it and add a flag.
+   Lines marked [BELOW TABLES] (narrative and figures shown below a section's tables) are settled: leave them.
 2. Propose CALLOUT boxes: passages a reader must not miss or should understand first. Use only the callout kinds
    listed under CALLOUT KINDS, and give a reason. Typical use:
    - attention: a prohibition, a restriction or a pitfall ("must not", "it is not permitted", "only ... if");

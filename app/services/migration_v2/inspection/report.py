@@ -284,6 +284,139 @@ def _slot_section(insp: Inspection) -> str:
             + "<h3>Validation</h3><table><tr><th></th><th>Gate</th><th>Issue</th></tr>" + issues + "</table>")
 
 
+_TOKEN = re.compile(r"\{\{ref:([A-Za-z0-9._\-]+)\}\}")
+
+
+def _claim_text(text: str) -> str:
+    return _TOKEN.sub(lambda m: f'<span class="tag">ref → {m.group(1)}</span>', escape(text))
+
+
+def _draft_section(insp: Inspection) -> str:
+    units = {u.unit_id: u for u in insp.source.iter_units()}
+    tpl = {t.section_id: t for t in insp.template.model.sections}
+    rules = {r.rule_id: r.text for r in insp.rules.rules}
+    parts = []
+    for draft in insp.drafts:
+        target = tpl.get(draft.target_section_id)
+        slots = {s.slot_id: s for s in target.slots} if target else {}
+        rows = []
+        for slot in draft.slots:
+            name = slots[slot.slot_id].key if slot.slot_id in slots and slots[slot.slot_id].key else slot.slot_id
+            for i, c in enumerate(slot.claims):
+                if c.is_gap_marker:
+                    text = f"<b class='muted'>[{escape(c.text)}]</b>"
+                elif c.kind.value == "heading":
+                    text = f"<b>{escape(c.text)}</b>"
+                else:
+                    indent = "&nbsp;" * 4 * c.list_level + ("• " if c.kind.value == "bullet" else "# " if c.kind.value == "step" else "")
+                    text = indent + _claim_text(c.text)
+                    changed = any(_norm_text(c.text) != _norm_text(units[u].text) for u in c.source_unit_ids if u in units)
+                    if changed and c.source_unit_ids:
+                        src = " ".join(units[u].text for u in c.source_unit_ids if u in units)
+                        text += f"<details><summary class='muted'>source</summary>{escape(src)}</details>"
+                cites = escape(c.source_section_id or ", ".join(c.source_unit_ids))
+                used = "".join(f"<span class='tag' title='{escape(rules.get(r, ''))}'>{escape(r)}</span>" for r in c.rule_ids_applied)
+                box = f"<span class='tag'>{escape(c.callout_kind.value)}</span>" if c.callout_kind else ""
+                rows.append(f"<tr><td>{escape(name) if i == 0 else ''}</td><td class='mono'>{escape(c.claim_id)}</td>"
+                            f"<td>{escape(c.kind.value)} {box}</td><td>{text}</td><td class='mono'>{cites}</td><td>{used}</td></tr>")
+        notes = "".join(f"<li>{escape(n)}</li>" for n in draft.unresolved_items)
+        parts.append(
+            f"<details class='sec'><summary><b>{escape(target.key if target and target.key else draft.target_section_id)}</b> "
+            f"{escape(target.heading if target else '')} <span class='muted'>({sum(len(s.claims) for s in draft.slots)} claims, "
+            f"{escape(draft.origin.value)})</span></summary>"
+            "<table><tr><th>Slot</th><th>Claim</th><th>Kind</th><th>Text</th><th>Cites</th><th>GWP rules applied</th></tr>"
+            + "".join(rows) + "</table>" + (f"<ul class='details'>{notes}</ul>" if notes else "") + "</details>")
+    issues = "".join(
+        f"<tr><td>{_badge(FAIL if i.gate else WARN)}</td><td>{escape(i.gate.value if i.gate else '')}</td>"
+        f"<td>{escape(i.message)}</td></tr>" for i in insp.draft_report.issues
+    ) or '<tr><td colspan="3" class="muted">No issues.</td></tr>'
+    return ("<p class='muted'>Reference tokens are resolved to final numbers when the document is assembled (Phase 12). "
+            "Rewritten claims show their source under 'source'.</p>" + "".join(parts)
+            + f"<h3>Checks (coverage {insp.draft_report.unit_coverage * 100:.0f}%)</h3><table><tr><th></th><th>Gate</th>"
+            "<th>Issue</th></tr>" + issues + "</table>")
+
+
+def _quality_section(insp: Inspection) -> str:
+    report = insp.quality
+    gates = "".join(f"<tr><td>{_badge(FAIL if n else PASS)}</td><td class='mono'>{escape(g.value)}</td><td>{n}</td></tr>"
+                    for g, n in report.gate_counts.items())
+    rounds = [e["detail"] for e in insp.events if e["event"] in ("validation", "repair")]
+    log = "".join(
+        f"<li>validation round {d['round']}: {d['issues']} issue(s), {d['gate_issues']} blocking; critic "
+        f"{'read ' + ', '.join(d['critic']['sections']) if d['critic']['sections'] else 'not run'} "
+        f"({d['critic']['findings']} finding(s)); repair: {', '.join(d['repair']) or 'none'}</li>" if "round" in d else
+        f"<li>repair of {', '.join(d['sections'])}: re-drafted {sum(len(v) for v in d['redrafted'].values())} passage(s)"
+        f"{' with the LLM' if d['llm'] else ''}</li>" for d in rounds)
+    order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+    issues = "".join(
+        f"<tr><td>{_badge(FAIL if i.gate else WARN if i.severity.value in ('critical', 'high', 'medium') else INFO)}</td>"
+        f"<td>{escape(i.severity.value)}</td><td>{escape(i.gate.value if i.gate else '')}</td><td>{escape(i.source.value)}</td>"
+        f"<td>{escape(i.message)}</td></tr>"
+        for i in sorted(report.issues, key=lambda i: (i.gate is None, order[i.severity.value])) if not i.resolved
+    ) or '<tr><td colspan="5" class="muted">No open issues.</td></tr>'
+    units = {u.unit_id: u for u in insp.source.iter_units()}
+    risky = "".join(f"<tr><td class='mono'>{escape(u)}</td><td>{escape(', '.join(t.value for t in tags))}</td>"
+                    f"<td>{escape((units[u].text if u in units else '')[:160])}</td></tr>"
+                    for u, tags in report.high_risk_units.items())
+    scores = "".join(f"<li>{escape(k)}: {v:g}</li>" for k, v in sorted(report.soft_scores.items()))
+    return (f"<p>The job would end <b>{escape(insp.final_status)}</b>. A gap (<span class='mono'>missing_slot</span>) "
+            "waits for a reviewer to add content or accept it as N/A; other gates block completion until fixed or resolved. "
+            "Critic findings are advisory; a high one sends its slot to targeted repair (at most 2 rounds).</p>"
+            "<table><tr><th></th><th>Hard gate</th><th>Open</th></tr>" + gates + "</table>"
+            + (f"<h3>Rounds</h3><ul>{log}</ul>" if log else "")
+            + "<h3>Open issues</h3><table><tr><th></th><th>Severity</th><th>Gate</th><th>Found by</th><th>Issue</th></tr>"
+            + issues + "</table>"
+            + (f"<h3>Soft scores</h3><ul>{scores}</ul>" if scores else "")
+            + f"<details><summary>{len(report.high_risk_units)} high-risk passage(s): an issue on one blocks completion</summary>"
+            "<table><tr><th>Passage</th><th>Why</th><th>Text</th></tr>" + risky + "</table></details>")
+
+
+def _document_section(insp: Inspection) -> str:
+    report = insp.render
+    if report is None:
+        return "<p class='muted'>No document was rendered (see the Word document check).</p>"
+    link = (f"<p>Review draft: <a href='{escape(insp.document.name)}'>{escape(insp.document.name)}</a> "
+            "(gap markers visible, slot content controls in place; references are REF fields to the new numbers).</p>"
+            if insp.document else "")
+    status = {"filled": PASS, "gap_marker": WARN, "removed_empty": INFO, "removed_accepted_gap": INFO, "no_anchor": FAIL}
+    slots = "".join(
+        f"<tr><td>{_badge(status.get(s.outcome.value, INFO))}</td><td class='mono'>{escape(s.slot_id)}</td>"
+        f"<td>{escape(s.outcome.value.replace('_', ' '))}</td><td>{s.claims}</td><td>{s.tables or ''}</td>"
+        f"<td>{s.callout_boxes or ''}</td><td>{escape(s.note or '')}</td></tr>" for s in report.slots)
+    regions = "".join(f"<li class='mono'>{escape(r.region_id)}: {escape(r.outcome.value)}"
+                      f"{' ' + escape(repr(r.choice)) if r.choice else ''}{' — ' + escape(r.note) if r.note else ''}</li>"
+                      for r in report.regions)
+    notes = "".join(f"<li><b>Problem:</b> {escape(p)}</li>" for p in report.problems) + "".join(
+        f"<li>{escape(w)}</li>" for w in report.warnings)
+    return (link + "<table><tr><th></th><th>Slot</th><th>Outcome</th><th>Claims</th><th>Tables</th><th>Callout boxes</th>"
+            "<th>Note</th></tr>" + slots + "</table>"
+            + (f"<p>Sections removed (optional, no content): {escape(', '.join(report.sections_removed))}</p>"
+               if report.sections_removed else "")
+            + (f"<h3>Conditional regions</h3><ul>{regions}</ul>" if regions else "")
+            + (f"<h3>Problems and warnings</h3><ul>{notes}</ul>" if notes else ""))
+
+
+def _references_section(insp: Inspection) -> str:
+    if insp.number_map is None:
+        return "<p class='muted'>Not assembled.</p>"
+    chapters = ", ".join(f"{escape(e.target_number)} {escape(e.source_id)}" for e in insp.number_map.entries
+                         if e.kind.value == "section" and e.source_id == e.target_section_id)
+    removed = (f"<p>Removed (optional, no content): {escape(', '.join(insp.number_map.sections_removed))}</p>"
+               if insp.number_map.sections_removed else "")
+    status = {"resolved": PASS, "merged": WARN, "unresolved": FAIL}
+    rows = "".join(
+        f"<tr><td>{_badge(status[r.status.value])}</td><td class='mono'>{escape(r.claim_id)}</td>"
+        f"<td>{escape(r.source_phrase)}</td><td>{escape(r.text)}</td><td class='mono'>{escape(r.bookmark or '')}</td>"
+        f"<td>{escape(r.note or '')}</td></tr>" for r in (insp.assembled.refs if insp.assembled else []))
+    table = ("<table><tr><th></th><th>Claim</th><th>Source says</th><th>New document says</th><th>REF field to</th>"
+             f"<th>Note</th></tr>{rows}</table>" if rows else "<p class='muted'>No internal cross-reference.</p>")
+    return f"<p>Chapters: {chapters}</p>{removed}{table}"
+
+
+def _norm_text(text: str) -> str:
+    return re.sub(r"\s+", " ", _TOKEN.sub("", text or "")).strip().lower()
+
+
 def _gwp_section(insp: Inspection) -> str:
     rules = insp.rules
     used = {r for e in insp.events if e["event"] == "slot_planner_llm" for r in e["detail"].get("gwp_rules_in_prompt", [])}
@@ -311,7 +444,9 @@ def _golden_section(insp: Inspection) -> str:
         return "<p class='muted'>No golden expectation exists for this SOP.</p>"
     rows = "".join(f"<tr><td>{escape(r.get('source_heading') or '—')}</td><td>{escape(r.get('target_heading') or '')}</td>"
                    f"<td>{escape(r.get('mapping_type') or '')}</td></tr>" for r in insp.golden.get("section_mapping", []))
-    problems = "".join(f"<li>{escape(p)}</li>" for p in insp.golden_problems + insp.golden_slot_problems + insp.missing_preserve)
+    problems = "".join(f"<li>{escape(p)}</li>" for p in insp.golden_problems + insp.golden_slot_problems
+                       + insp.golden_draft_problems + insp.missing_preserve)
+    problems += "".join(f"<li>reworded by the GWP rewrite (check the meaning): {escape(p)}</li>" for p in insp.draft_paraphrased)
     callouts = "".join(f"<tr><td>{escape(text[:120])}</td><td>{escape(kind)}</td><td>{escape(got)}</td></tr>"
                        for text, kind, got in insp.golden_callouts)
     return ((f"<ul>{problems}</ul>" if problems else "<p>The plans match the golden mapping, slot placements and empty slots.</p>")
@@ -334,7 +469,7 @@ def render(insp: Inspection) -> str:
 <body><header><h1>{_badge(status)} {escape(insp.sop_path.name)}</h1>
 <div class="meta">Template: {escape(insp.template.path.name)} · GWP: {gwp} ·
 LLM check: {'on' if insp.llm else 'off'} · Generated {datetime.now():%Y-%m-%d %H:%M}</div>
-<nav><a href="#checks">Checks</a><a href="#plan">Section plan</a><a href="#slots">Slot plan</a><a href="#gwp">GWP rules</a>
+<nav><a href="#checks">Checks</a><a href="#plan">Section plan</a><a href="#slots">Slot plan</a><a href="#draft">Draft</a><a href="#quality">Quality</a><a href="#document">Document</a><a href="#gwp">GWP rules</a>
 <a href="#outline">SOP passages</a>
 <a href="#facts">Protected facts</a><a href="#template">Template</a><a href="#text">Text completeness</a>
 <a href="#golden">Golden</a><a href="#files">Files</a><a href="../index.html">All SOPs</a></nav></header>
@@ -342,6 +477,10 @@ LLM check: {'on' if insp.llm else 'off'} · Generated {datetime.now():%Y-%m-%d %
 <h2 id="checks">Checks</h2>{_checks_table(insp.checks)}
 <h2 id="plan">Section plan (SOP sections → template sections)</h2>{_plan_section(insp)}
 <h2 id="slots">Slot plan (passages → template slots)</h2>{_slot_section(insp)}
+<h2 id="draft">Draft (claims per slot)</h2>{_draft_section(insp)}
+<h2 id="quality">Quality (validation, critic, repair, gates)</h2>{_quality_section(insp)}
+<h2 id="refs">Numbers and cross-references</h2>{_references_section(insp)}
+<h2 id="document">Word document (review draft)</h2>{_document_section(insp)}
 <h2 id="gwp">GWP rules</h2>{_gwp_section(insp)}
 <h2 id="outline">SOP passages, as extracted</h2>{_outline_section(insp)}
 <h2 id="facts">Protected facts</h2>{_facts_section(insp)}

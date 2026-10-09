@@ -100,6 +100,10 @@ class SlotMapping(V2Model):
     slot_id: str
     source_unit_ids: list[str] = Field(default_factory=list)
     extraction_scope: list[str] = Field(default_factory=list, description="e.g. ['actor', 'responsibility']")
+    below_unit_ids: list[str] = Field(
+        default_factory=list,
+        description="Units of a table slot shown after its rows (narrative and figures below a section's tables), in source order",
+    )
     migration_action: MigrationAction = MigrationAction.EXTRACT_AND_REWRITE
     ordering_rule: OrderingRule = OrderingRule.PRESERVE_SOURCE_ORDER
     status: MappingStatus = MappingStatus.MAPPED
@@ -115,6 +119,9 @@ class SlotMapping(V2Model):
     def _rules(self) -> "SlotMapping":
         if self.status == MappingStatus.MAPPED and not self.source_unit_ids:
             raise ValueError(f"slot {self.slot_id} is mapped but has no source_unit_ids")
+        stray = [u for u in self.below_unit_ids if u not in self.source_unit_ids]
+        if stray:
+            raise ValueError(f"slot {self.slot_id}: below_unit_ids {stray} are not among its source_unit_ids")
         if self.status == MappingStatus.SOURCE_CONTENT_NOT_FOUND:
             if self.source_unit_ids:
                 raise ValueError(f"slot {self.slot_id} is source_content_not_found but lists source units")

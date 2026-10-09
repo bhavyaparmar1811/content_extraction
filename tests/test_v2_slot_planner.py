@@ -317,10 +317,11 @@ def test_tables_go_whole_and_text_follows_its_table():
     _, _, plan = _plan()
     defs = _slots(plan, "TGT-3")
     assert defs["terms"].source_unit_ids == ["SRC-3-U001", "SRC-3-U002"]  # the intro line goes with the table it introduces
-    assert defs["abbreviations"].source_unit_ids == ["SRC-3-U005", "SRC-3-U006"]
-    section = plan.section("TGT-3")
-    assert section.unplaced_unit_ids == ["SRC-3-U003", "SRC-3-U004"]  # figure and caption: the reviewer decides
-    assert any("figure" in n for n in section.notes)
+    # Figure and caption between the tables go below the section's tables: the last table slot, after its rows.
+    assert defs["abbreviations"].source_unit_ids == ["SRC-3-U003", "SRC-3-U004", "SRC-3-U005", "SRC-3-U006"]
+    assert defs["abbreviations"].below_unit_ids == ["SRC-3-U003", "SRC-3-U004"]
+    assert defs["abbreviations"].status == MappingStatus.MAPPED and defs["terms"].below_unit_ids == []
+    assert plan.section("TGT-3").unplaced_unit_ids == []
 
     roles = _slots(plan, "TGT-5")
     assert roles["roles"].source_unit_ids == ["SRC-5-U001", "SRC-5-U002"]
@@ -378,7 +379,7 @@ def test_rule_plan_validates_clean():
     _, _, plan = _plan(doc=doc)
     report = validate_slot_plan(plan, section_plan(doc), doc, template())
     assert report.open_gate_issues == [] and report.unit_coverage == 1.0
-    assert any("fit no slot" in i.message for i in report.issues)  # the figure, for review
+    assert not any("fit no slot" in i.message for i in report.issues)  # every passage has a slot
 
 
 # ── Prompt and LLM ────────────────────────────────────────────────────
@@ -454,6 +455,38 @@ def test_invalid_llm_items_are_reported_and_dropped():
     assert len(dropped) == 7
     plan = planner.build_plan(proposal, "J", 2)
     assert _slots(plan, "TGT-2")["roles"].source_unit_ids == ["SRC-2-U001"]  # unchanged
+
+
+def test_the_llm_never_drops_a_placed_passage_or_moves_one_below_the_tables():
+    planner, proposal, _ = _plan()
+    proposal.work_of_unit("SRC-3-U001").placements["SRC-3-U001"].check = "unsure"  # brings DEFINITIONS into the prompt
+    block = planner.blocks(proposal)[0]
+    prompt = planner.prompt(proposal, block)
+    assert "SRC-3-U003 | figure | → abbreviations [BELOW TABLES]" in prompt
+    bad = SlotPlanCorrections(changes=[
+        SlotChange(unit_ids=["SRC-3-U001"], slot_refs=[], reason="an intro line, not a term"),
+        SlotChange(unit_ids=["SRC-3-U003", "SRC-3-U004"], slot_refs=["DEFINITIONS.terms"], reason="figure of the terms"),
+        SlotChange(unit_ids=["SRC-3-U004"], slot_refs=[], reason="figures and captions are supplementary"),
+    ])
+    joined = " | ".join(planner.check_corrections(proposal, block, bad))
+    assert "a passage is never dropped" in joined and joined.count("below the section's tables by rule") == 2
+    assert len(planner.apply(proposal, block, bad)) == 3
+    plan = planner.build_plan(proposal, "J", 2)
+    defs = _slots(plan, "TGT-3")
+    assert defs["terms"].source_unit_ids[0] == "SRC-3-U001" and plan.section("TGT-3").unplaced_unit_ids == []
+    assert defs["abbreviations"].below_unit_ids == ["SRC-3-U003", "SRC-3-U004"]
+
+
+def test_a_long_narrative_with_its_figure_goes_below_the_tables_but_an_intro_line_stays():
+    long = "The GBS Solution operates across functions and companies to leverage productivity and compliance. " * 4
+    doc = sop()
+    defs = next(s for s in doc.sections if s.section_id == "SRC-3")
+    units = {u.unit_id: u for u in defs.units}
+    units["SRC-3-U003"].unit_type, units["SRC-3-U003"].text = UnitType.PARAGRAPH, long.strip()  # narrative, no figure
+    _, _, plan = _plan(doc=doc)
+    abbr = _slots(plan, "TGT-3")["abbreviations"]
+    assert abbr.below_unit_ids == ["SRC-3-U003", "SRC-3-U004"]  # the narrative and the caption after it
+    assert _slots(plan, "TGT-3")["terms"].source_unit_ids == ["SRC-3-U001", "SRC-3-U002"]  # the intro stays
 
 
 class FakeChain:
@@ -546,7 +579,7 @@ def test_validator_gates():
 
 # ── Stage, orchestrator and API ───────────────────────────────────────
 
-from tests.test_v2_migration_jobs import Env, _events, _wait_for  # noqa: E402
+from tests.test_v2_migration_jobs import END_STATUS, Env, _events, _wait_for  # noqa: E402
 
 
 class FakeFactory:
@@ -658,7 +691,7 @@ def test_api_slot_plan_review_validates_and_blocks_approval(api):
     fixed = client.patch(f"/api/v1/migrations/{job_id}/slot-plan", json=plan)
     assert [i for i in fixed.json()["validation"]["issues"] if i.get("gate")] == []
     assert client.post(f"/api/v1/migrations/{job_id}/slot-plan/approve").status_code == 200
-    _wait_for(client, job_id, {"COMPLETED_WITH_WARNINGS"})
+    _wait_for(client, job_id, {END_STATUS.value})
 
 
 # ── Real samples vs the golden slot expectations (LLM off) ────────────
